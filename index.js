@@ -13,6 +13,7 @@ const {version} = require('./package');
 program
 .version(version)
 .option('-g, --generate', 'generate a static license summary file')
+.option('-i, --info', 'provides information about all direct dependency licenses')
 .option('-o, --outputFilePath <path>', 'specify path and name of the output file')
 .option('-v, --verbose', 'activate verbose logging ')
 .parse(process.argv);
@@ -23,7 +24,7 @@ if (program.outputFilePath && !program.generate) {
 
 const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LICENSE.txt'];
 
-(async function() {
+(async function () {
   try {
     if (!fs.existsSync('./package.json')) {
       console.error(chalk.red('There is no package,json in the current directory.'));
@@ -39,7 +40,6 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
 
     const content = fs.readFileSync('./package.json', 'utf-8');
     const dependencies = Object.keys(JSON.parse(content).dependencies);
-
     console.log(chalk.magentaBright('Found %d dependencies.'), dependencies.length);
 
     const spinner = ora({
@@ -47,6 +47,11 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
       color: 'magenta'
     });
     if (!program.verbose) spinner.start();
+
+    const sanitizeLicenseLabel = (label) => {
+      return label
+      .replace('-', ' ');
+    };
 
     const licenseItems = [];
     const licenseDownloads = {};
@@ -60,7 +65,7 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
 
         const licenseItem = {
           module: dependency,
-          type: packageFile.license.replace('-', ' '),
+          type: sanitizeLicenseLabel(packageFile.license),
           description: packageFile.description || null
         };
 
@@ -129,14 +134,41 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
         if (program.verbose) console.warn(chalk.red('Did not find directory for "%s"'), dependency, e);
       }
     }
-    if(!program.verbose) spinner.succeed(chalk.magentaBright('Scanning node_modules/... done!'));
+    if (!program.verbose) spinner.succeed(chalk.magentaBright('Scanning node_modules/... done!'));
 
-    console.log(chalk.magentaBright('The following licenses are used:'), [...new Set(licenseItems.map(i => i.type))].join(', '));
+    console.log(chalk.magentaBright('The following licenses are used:'),
+      [...new Set(licenseItems.map(i => i.type))].filter(i => i).join(', ')
+    );
     console.log(chalk.magentaBright('Found %d license files'), licenseFileCounter);
     console.log(chalk.magentaBright('Downloaded %d license files'), licenseDownloadCounter);
     console.log(chalk.red('Failures (%d):'), failures.length);
     for (let fail of failures) {
       console.log(chalk.redBright(' - ' + fail));
+    }
+
+    if (program.info) {
+      const licenseInfo = licenseItems.map(i => {
+        return {
+          module: i.module,
+          license: sanitizeLicenseLabel(i.type)
+        };
+      }).reduce((result, current) => {
+        if (!current.license) return result;
+
+        if (!result.hasOwnProperty(current.license)) {
+          result[current.license] = [current.module];
+        } else {
+          result[current.license].push(current.module);
+        }
+
+        return result;
+      }, {});
+      for (let licenseType of Object.keys(licenseInfo)) {
+        console.log(chalk.blueBright.bold(`${licenseType} (%d usages)`), licenseInfo[licenseType].length);
+        for (let module of licenseInfo[licenseType]) {
+          console.log(chalk.blueBright(`  |-- ${module}`));
+        }
+      }
     }
 
     if (program.generate) {
