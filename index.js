@@ -4,6 +4,7 @@ const ora = require('ora');
 const chalk = require('chalk');
 const opn = require('opn');
 const yesno = require('yesno');
+const prompts = require('prompts');
 const fs = require('fs');
 const os = require('os');
 const https = require('https');
@@ -26,29 +27,59 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
 
 (async function () {
   try {
-    if (!fs.existsSync('./package.json')) {
-      console.error(chalk.red('There is no package,json in the current directory.'));
+    const packageFileExists = fs.existsSync('./package.json');
+    const composerFileExists = fs.existsSync('./composer.json');
+    const nodeModulesExists = fs.existsSync('./node_modules');
+    const vendorFolderExists = fs.existsSync('./vendor');
+
+    if (!packageFileExists && !composerFileExists) {
+      console.error(chalk.red('There is no dependency file (package,json or composer.json) in the current directory.'));
 
       return;
     }
 
-    if (!fs.existsSync('./node_modules')) {
-      console.error(chalk.red('There is no node_modules folder in the current directory.'));
+    if (!nodeModulesExists && !vendorFolderExists) {
+      console.error(chalk.red('There is no dependency folder (node_modules/ or vendor/) in the current directory.'));
 
       return;
     }
 
-    const content = fs.readFileSync('./package.json', 'utf-8');
-    const dependencies = Object.keys(JSON.parse(content).dependencies);
+    let sourceFile;
+    if (packageFileExists && composerFileExists) {
+      const promptResponse = await prompts({
+        type: 'select',
+        name: 'sourceFile',
+        message: chalk.magentaBright('Which source file should get parsed?'),
+        initial: 0,
+        choices: [
+          {title: chalk.blueBright('package.json'), value: 'package.json'},
+          {title: chalk.blueBright('composer.json'), value: 'composer.json'}
+        ],
+      });
+
+      sourceFile = promptResponse['sourceFile'];
+    } else {
+      sourceFile = packageFileExists ? 'package.json' : 'composer.json';
+    }
+
+    const isPackageMode = () => sourceFile === 'package.json';
+    const isComposerMode = () => sourceFile === 'composer.json';
+    const folder = isPackageMode() ? 'node_modules' : 'vendor';
+
+    const content = fs.readFileSync('./' + sourceFile, 'utf-8');
+    let dependencies = Object.keys(JSON.parse(content)[isPackageMode() ? 'dependencies' : 'require']);
+    if (isComposerMode()) dependencies = dependencies.filter(d => d.indexOf('/') >= 0);
     console.log(chalk.magentaBright('Found %d dependencies.'), dependencies.length);
 
     const spinner = ora({
-      text: chalk.magentaBright('Scanning node_modules/'),
+      text: chalk.magentaBright('Scanning ' + folder + '/'),
       color: 'magenta'
     });
     if (!program.verbose) spinner.start();
 
     const sanitizeLicenseLabel = (label) => {
+      if (!label) return null;
+
       return label
       .replace('-', ' ');
     };
@@ -60,27 +91,27 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
     let licenseDownloadCounter = 0;
     for (let dependency of dependencies) {
       try {
-        const dependencyFolderFiles = fs.readdirSync('./node_modules/' + dependency);
-        const packageFile = JSON.parse(fs.readFileSync(`./node_modules/${dependency}/package.json`, 'utf-8'));
+        const dependencyFolderFiles = fs.readdirSync(`./${folder}/${dependency}`);
+        const descriptionFile = JSON.parse(fs.readFileSync(`./${folder}/${dependency}/${sourceFile}`, 'utf-8'));
 
         const licenseItem = {
           module: dependency,
-          type: sanitizeLicenseLabel(packageFile.license),
-          description: packageFile.description || null
+          type: sanitizeLicenseLabel(descriptionFile.license),
+          description: descriptionFile.description || null
         };
 
         // Check for license file
         const licenseFile = LICENSE_FILENAMES.filter(f => dependencyFolderFiles.includes(f));
         if (licenseFile.length > 0) {
           licenseFileCounter++;
-          licenseItem['license'] = fs.readFileSync(`./node_modules/${dependency}/${licenseFile[0]}`, 'utf-8');
+          licenseItem['license'] = fs.readFileSync(`./${folder}/${dependency}/${licenseFile[0]}`, 'utf-8');
 
           licenseItems.push(licenseItem);
           continue;
         }
 
         // Check for repository
-        if (packageFile.hasOwnProperty('repository')) {
+        if ((isPackageMode() && descriptionFile.hasOwnProperty('repository')) || isComposerMode()) {
           const fetchLicenseFileFromRepo = async (url) => {
             let message = 'Trying to fetch license file from "' + url + '"... ';
             const response = await request(url);
@@ -90,12 +121,18 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
             return response;
           };
 
-          const url = packageFile.repository.url;
-          const repoUrl = url.replace(/^git\+/, '')
-          .replace(/\.git$/, '')
-          .replace('ssh://git@', 'https://');
-          const rawUrl = repoUrl
-          .replace('https://github.com', 'https://raw.githubusercontent.com');
+          let rawUrl;
+          if (isPackageMode()) {
+            const url = descriptionFile.repository.url;
+            const repoUrl = url.replace(/^git\+/, '')
+            .replace(/\.git$/, '')
+            .replace('ssh://git@', 'https://');
+
+            rawUrl = repoUrl
+            .replace('https://github.com', 'https://raw.githubusercontent.com');
+          } else {
+            rawUrl = 'https://raw.githubusercontent.com/' + dependency;
+          }
 
           for (let branch of ['master', 'dev', 'develop']) {
             for (let licenseFilename of LICENSE_FILENAMES) {
@@ -142,7 +179,7 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
     console.log(chalk.magentaBright('Found %d license files'), licenseFileCounter);
     console.log(chalk.magentaBright('Downloaded %d license files'), licenseDownloadCounter);
     if (failures.length > 0) {
-      console.log(chalk.red('Failures (%d):'), failures.length);
+      console.log(chalk.red('No license file found (%d):'), failures.length);
       for (let fail of failures) {
         console.log(chalk.redBright(' - ' + fail));
       }
@@ -179,7 +216,8 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
       console.log(chalk.cyanBright('Creating license HTML file (' + filePath + ')...'));
       let html = '';
       for (let f of licenseItems) {
-        let licenseText = f['license'] || '<strong style="color: red">NO LICENSE INFORMATION FOUND</strong>';
+        // TODO: Skip entries with no license information at all
+        let licenseText = f['license'] || `${f['type']}. No license file provided.`;
 
         html += `
       <h2>${f['module']}</h2>
