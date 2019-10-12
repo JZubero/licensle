@@ -141,9 +141,11 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
     );
     console.log(chalk.magentaBright('Found %d license files'), licenseFileCounter);
     console.log(chalk.magentaBright('Downloaded %d license files'), licenseDownloadCounter);
-    console.log(chalk.red('Failures (%d):'), failures.length);
-    for (let fail of failures) {
-      console.log(chalk.redBright(' - ' + fail));
+    if (failures.length > 0) {
+      console.log(chalk.red('Failures (%d):'), failures.length);
+      for (let fail of failures) {
+        console.log(chalk.redBright(' - ' + fail));
+      }
     }
 
     if (program.info) {
