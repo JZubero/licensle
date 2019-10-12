@@ -14,6 +14,7 @@ const {version} = require('./package');
 program
 .version(version)
 .option('-g, --generate', 'generate a static license summary file')
+.option('-b, --browser', 'open up a browser and show generated static license summary file')
 .option('-i, --info', 'provides information about all direct dependency licenses')
 .option('-o, --outputFilePath <path>', 'specify path and name of the output file')
 .option('-v, --verbose', 'activate verbose logging ')
@@ -21,6 +22,10 @@ program
 
 if (program.outputFilePath && !program.generate) {
   console.warn(chalk.bgYellow.black('Warning: Using --outputFilePath without -g (--generate) will not have any effect.'));
+}
+
+if (program.browser && !program.generate) {
+  console.warn(chalk.bgYellow.black('Warning: Using --browser without -g (--generate) will not have any effect.'));
 }
 
 const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LICENSE.txt'];
@@ -228,10 +233,14 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
       }
 
       fs.writeFileSync(filePath, html, 'utf-8');
-      const showInBrowser = await yesno({
-        question: chalk.cyanBright('Show output file in browser? (Y/n)'),
-        defaultValue: 'y'
-      });
+
+      let showInBrowser = program.browser;
+      if (!showInBrowser) {
+        showInBrowser = await yesno({
+          question: chalk.cyanBright('Show output file in browser? (Y/n)'),
+          defaultValue: 'y'
+        });
+      }
 
       if (showInBrowser) opn(filePath);
     }
