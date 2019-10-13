@@ -96,8 +96,11 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
     let licenseDownloadCounter = 0;
     for (let dependency of dependencies) {
       try {
-        const dependencyFolderFiles = fs.readdirSync(`./${folder}/${dependency}`);
-        const descriptionFile = JSON.parse(fs.readFileSync(`./${folder}/${dependency}/${sourceFile}`, 'utf-8'));
+        let dependencyFolder = fs.existsSync(`./${folder}/${dependency}`) ?
+          `./${folder}/${dependency}` :
+          `./${dependency.split('/').reverse()[0]}`;
+        const dependencyFolderFiles = fs.readdirSync(dependencyFolder);
+        const descriptionFile = JSON.parse(fs.readFileSync(`./${dependencyFolder}/${sourceFile}`, 'utf-8'));
 
         const licenseItem = {
           module: dependency,
@@ -109,7 +112,7 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
         const licenseFile = LICENSE_FILENAMES.filter(f => dependencyFolderFiles.includes(f));
         if (licenseFile.length > 0) {
           licenseFileCounter++;
-          licenseItem['license'] = fs.readFileSync(`./${folder}/${dependency}/${licenseFile[0]}`, 'utf-8');
+          licenseItem['license'] = fs.readFileSync(`./${dependencyFolder}/${licenseFile[0]}`, 'utf-8');
 
           licenseItems.push(licenseItem);
           continue;
