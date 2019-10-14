@@ -15,6 +15,7 @@ program
 .version(version)
 .option('-g, --generate', 'generate a static license summary file')
 .option('-b, --browser', 'open up a browser and show generated static license summary file')
+.option('--no-browser', 'prevents the browser from popping open')
 .option('-i, --info', 'provides information about all direct dependency licenses')
 .option('-o, --outputFilePath <path>', 'specify path and name of the output file')
 .option('-v, --verbose', 'activate verbose logging ')
@@ -237,15 +238,17 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
 
       fs.writeFileSync(filePath, html, 'utf-8');
 
-      let showInBrowser = program.browser;
-      if (!showInBrowser) {
-        showInBrowser = await yesno({
-          question: chalk.cyanBright('Show output file in browser? (Y/n)'),
-          defaultValue: 'y'
-        });
-      }
+      if (program.browser !== false) {
+        let showInBrowser = program.browser;
+        if (!showInBrowser) {
+          showInBrowser = await yesno({
+            question: chalk.cyanBright('Show output file in browser? (Y/n)'),
+            defaultValue: 'y'
+          });
+        }
 
-      if (showInBrowser) opn(filePath);
+        if (showInBrowser) opn(filePath);
+      }
     }
   } catch (e) {
     console.error(chalk.red(e));
