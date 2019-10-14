@@ -15,6 +15,7 @@ program
 .version(version)
 .option('-g, --generate', 'generate a static license summary file')
 .option('-b, --browser', 'open up a browser and show generated static license summary file')
+.option('--no-browser', 'prevents the browser from popping open')
 .option('-i, --info', 'provides information about all direct dependency licenses')
 .option('-o, --outputFilePath <path>', 'specify path and name of the output file')
 .option('-v, --verbose', 'activate verbose logging ')
@@ -96,8 +97,11 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
     let licenseDownloadCounter = 0;
     for (let dependency of dependencies) {
       try {
-        const dependencyFolderFiles = fs.readdirSync(`./${folder}/${dependency}`);
-        const descriptionFile = JSON.parse(fs.readFileSync(`./${folder}/${dependency}/${sourceFile}`, 'utf-8'));
+        let dependencyFolder = fs.existsSync(`./${folder}/${dependency}`) ?
+          `./${folder}/${dependency}` :
+          `./${dependency.split('/').reverse()[0]}`;
+        const dependencyFolderFiles = fs.readdirSync(dependencyFolder);
+        const descriptionFile = JSON.parse(fs.readFileSync(`./${dependencyFolder}/${sourceFile}`, 'utf-8'));
 
         const licenseItem = {
           module: dependency,
@@ -109,7 +113,7 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
         const licenseFile = LICENSE_FILENAMES.filter(f => dependencyFolderFiles.includes(f));
         if (licenseFile.length > 0) {
           licenseFileCounter++;
-          licenseItem['license'] = fs.readFileSync(`./${folder}/${dependency}/${licenseFile[0]}`, 'utf-8');
+          licenseItem['license'] = fs.readFileSync(`./${dependencyFolder}/${licenseFile[0]}`, 'utf-8');
 
           licenseItems.push(licenseItem);
           continue;
@@ -221,12 +225,11 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
       console.log(chalk.cyanBright('Creating license HTML file (' + filePath + ')...'));
       let html = '';
       for (let f of licenseItems) {
-        // TODO: Skip entries with no license information at all
-        let licenseText = f['license'] || `${f['type']}. No license file provided.`;
+        let licenseText = f['license'] || 'No license file provided.';
 
         html += `
       <h2>${f['module']}</h2>
-      <p>${f['description']}</p>
+      <p>${f['type'] ? `<strong>${f['type']}</strong> - ` : ''}${f['description']}</p>
       <pre>${licenseText}</pre>
       <hr>
     `;
@@ -234,15 +237,17 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
 
       fs.writeFileSync(filePath, html, 'utf-8');
 
-      let showInBrowser = program.browser;
-      if (!showInBrowser) {
-        showInBrowser = await yesno({
-          question: chalk.cyanBright('Show output file in browser? (Y/n)'),
-          defaultValue: 'y'
-        });
-      }
+      if (program.browser !== false) {
+        let showInBrowser = program.browser;
+        if (!showInBrowser) {
+          showInBrowser = await yesno({
+            question: chalk.cyanBright('Show output file in browser? (Y/n)'),
+            defaultValue: 'y'
+          });
+        }
 
-      if (showInBrowser) opn(filePath);
+        if (showInBrowser) opn(filePath);
+      }
     }
   } catch (e) {
     console.error(chalk.red(e));

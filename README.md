@@ -14,11 +14,11 @@ Options:
   -V, --version                output the version number
   -g, --generate               generate a static license summary file
   -b, --browser                open up a browser and show generated static license summary file
+  --no-browser                 prevents the browser from popping open
   -i, --info                   provides information about all direct dependency licenses
   -o, --outputFilePath <path>  specify path and name of the output file
   -v, --verbose                activate verbose logging 
   -h, --help                   output usage information
-
 ```
 
 ## Maintainer
