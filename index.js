@@ -225,12 +225,11 @@ const LICENSE_FILENAMES = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LI
       console.log(chalk.cyanBright('Creating license HTML file (' + filePath + ')...'));
       let html = '';
       for (let f of licenseItems) {
-        // TODO: Skip entries with no license information at all
-        let licenseText = f['license'] || `${f['type']}. No license file provided.`;
+        let licenseText = f['license'] || 'No license file provided.';
 
         html += `
       <h2>${f['module']}</h2>
-      <p>${f['description']}</p>
+      <p>${f['type'] ? `<strong>${f['type']}</strong> - ` : ''}${f['description']}</p>
       <pre>${licenseText}</pre>
       <hr>
     `;
