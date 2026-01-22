@@ -21,7 +21,8 @@
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "typecheck": "tsc --noEmit --pretty",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest"
   },
   "packageManager": "pnpm@10.6.5",
   "dependencies": {
@@ -36,6 +37,7 @@
     "@types/node": "^24.1.0",
     "@types/prompts": "~2.4.9",
     "oxlint": "^1.41.0",
-    "typescript": "~5.9.3"
+    "typescript": "~5.9.3",
+    "vitest": "^2.0.4"
   }
 }

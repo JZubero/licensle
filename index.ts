@@ -12,14 +12,14 @@ import pkg from './package.json' with { type: 'json' };
 
 const { version } = pkg;
 
-interface LicenseItem {
+export interface LicenseItem {
   module: string;
   type: string | null;
   description: string | null;
   license?: string;
 }
 
-interface LicenseInfo {
+export interface LicenseInfo {
   [licenseType: string]: string[];
 }
 
@@ -28,29 +28,10 @@ interface RequestResponse {
   data: string;
 }
 
-program
-  .version(version)
-  .option('-g, --generate', 'generate a static license summary file')
-  .option('-b, --browser', 'open up a browser and show generated static license summary file')
-  .option('--no-browser', 'prevents the browser from popping open')
-  .option('-i, --info', 'provides information about all direct dependency licenses')
-  .option('-o, --outputFilePath <path>', 'specify path and name of the output file')
-  .option('-v, --verbose', 'activate verbose logging ');
+export const LICENSE_FILENAMES: string[] = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LICENSE.txt'];
+export const README_FILENAMES: string[] = ['README.md', 'readme.md', 'README', 'readme'];
 
-program.parse(process.argv);
-const options = program.opts();
-
-if (options.outputFilePath && !options.generate) {
-  console.warn(chalk.bgYellow.black('Warning: Using --outputFilePath without -g (--generate) will not have any effect.'));
-}
-
-if (options.browser && !options.generate) {
-  console.warn(chalk.bgYellow.black('Warning: Using --browser without -g (--generate) will not have any effect.'));
-}
-
-const LICENSE_FILENAMES: string[] = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LICENSE.txt'];
-
-(async function () {
+export async function main(options: any) {
   try {
     const packageFileExists = fs.existsSync('./package.json');
     const composerFileExists = fs.existsSync('./composer.json');
@@ -91,7 +72,7 @@ const LICENSE_FILENAMES: string[] = ['LICENSE', 'LICENSE.md', 'license', 'licens
     const content: string = fs.readFileSync('./' + sourceFile, 'utf-8');
     let dependencies: string[] = Object.keys(JSON.parse(content)[isPackageMode() ? 'dependencies' : 'require']);
     if (isComposerMode()) dependencies = dependencies.filter(d => d.indexOf('/') >= 0);
-    console.log(chalk.magentaBright('Found %d dependencies.'), dependencies.length);
+    console.log(chalk.magentaBright(`Found ${dependencies.length} dependencies.`));
 
     const spinner = ora({
       text: chalk.magentaBright('Scanning ' + folder + '/'),
@@ -109,6 +90,7 @@ const LICENSE_FILENAMES: string[] = ['LICENSE', 'LICENSE.md', 'license', 'licens
     const failures: string[] = [];
     let licenseFileCounter = 0;
     let licenseDownloadCounter = 0;
+    let readmeLicenseCounter = 0;
 
     for (let dependency of dependencies) {
       try {
@@ -174,6 +156,18 @@ const LICENSE_FILENAMES: string[] = ['LICENSE', 'LICENSE.md', 'license', 'licens
           if (licenseItem.license) continue;
         }
 
+        const readmeFile = README_FILENAMES.find(f => dependencyFolderFiles.includes(f));
+        if (readmeFile) {
+          const readmeContent = fs.readFileSync(`./${dependencyFolder}/${readmeFile}`, 'utf-8');
+          const licenseSection = readmeContent.match(/#+ \b(License|Licence)\b\s*([\s\S]*)/i);
+          if (licenseSection && licenseSection[2]) {
+            readmeLicenseCounter++;
+            licenseItem.license = licenseSection[2].trim();
+            licenseItems.push(licenseItem);
+            continue;
+          }
+        }
+
         failures.push(dependency);
         if (options.verbose) console.warn(chalk.red('No file or download available for "%s"'), dependency);
         licenseItems.push(licenseItem);
@@ -186,10 +180,11 @@ const LICENSE_FILENAMES: string[] = ['LICENSE', 'LICENSE.md', 'license', 'licens
     console.log(chalk.magentaBright('The following licenses are used:'),
       [...new Set(licenseItems.map(i => i.type))].filter(i => i).join(', ')
     );
-    console.log(chalk.magentaBright('Found %d license files'), licenseFileCounter);
-    console.log(chalk.magentaBright('Downloaded %d license files'), licenseDownloadCounter);
+    console.log(chalk.magentaBright(`Found ${licenseFileCounter} license files`));
+    console.log(chalk.magentaBright(`Found ${readmeLicenseCounter} licenses in README files`));
+    console.log(chalk.magentaBright(`Downloaded ${licenseDownloadCounter} license files`));
     if (failures.length > 0) {
-      console.log(chalk.red('No license file found (%d):'), failures.length);
+      console.log(chalk.red(`No license file found (${failures.length}):`));
       for (let fail of failures) {
         console.log(chalk.redBright(' - ' + fail));
       }
@@ -207,7 +202,7 @@ const LICENSE_FILENAMES: string[] = ['LICENSE', 'LICENSE.md', 'license', 'licens
       }, {});
 
       for (let licenseType of Object.keys(licenseInfo)) {
-        console.log(chalk.blueBright.bold(`${licenseType} (%d usages)`), licenseInfo[licenseType].length);
+        console.log(chalk.blueBright.bold(`${licenseType} (${licenseInfo[licenseType].length} usages)`));
         for (let module of licenseInfo[licenseType]) {
           console.log(chalk.blueBright(`  |-- ${module}`));
         }
@@ -243,7 +238,7 @@ const LICENSE_FILENAMES: string[] = ['LICENSE', 'LICENSE.md', 'license', 'licens
   } catch (e: any) {
     console.error(chalk.red(e.message));
   }
-})();
+}
 
 async function request(url: string): Promise<RequestResponse> {
   return new Promise((resolve, reject) => {
@@ -256,4 +251,28 @@ async function request(url: string): Promise<RequestResponse> {
       reject(err);
     });
   });
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  program
+    .version(version)
+    .option('-g, --generate', 'generate a static license summary file')
+    .option('-b, --browser', 'open up a browser and show generated static license summary file')
+    .option('--no-browser', 'prevents the browser from popping open')
+    .option('-i, --info', 'provides information about all direct dependency licenses')
+    .option('-o, --outputFilePath <path>', 'specify path and name of the output file')
+    .option('-v, --verbose', 'activate verbose logging ');
+
+  program.parse(process.argv);
+  const options = program.opts();
+
+  if (options.outputFilePath && !options.generate) {
+    console.warn(chalk.bgYellow.black('Warning: Using --outputFilePath without -g (--generate) will not have any effect.'));
+  }
+
+  if (options.browser && !options.generate) {
+    console.warn(chalk.bgYellow.black('Warning: Using --browser without -g (--generate) will not have any effect.'));
+  }
+
+  main(options);
 }
