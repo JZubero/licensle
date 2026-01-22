@@ -2,7 +2,8 @@
   "name": "licensle",
   "version": "0.2.0",
   "description": "A command-line tool for collecting dependency licenses from a project.",
-  "main": "index.js",
+  "main": "dist/index.js",
+  "type": "module",
   "keywords": [
     "license",
     "parser"
@@ -14,14 +15,27 @@
   "author": "Julian Scheuchenzuber <js@lvl51.de>",
   "license": "MIT",
   "bin": {
-    "licensle": "./index.js"
+    "licensle": "./dist/index.js"
   },
+  "scripts": {
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "typecheck": "tsc --noEmit --pretty",
+    "build": "tsc"
+  },
+  "packageManager": "pnpm@10.6.5",
   "dependencies": {
-    "chalk": "2.4.2",
-    "commander": "3.0.2",
-    "opn": "6.0.0",
-    "ora": "4.0.2",
-    "prompts": "^2.2.1",
-    "yesno": "0.3.1"
+    "chalk": "~5.6.2",
+    "commander": "~14.0.2",
+    "open": "^11.0.0",
+    "ora": "~9.1.0",
+    "prompts": "~2.4.2",
+    "yesno": "~0.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.1.0",
+    "@types/prompts": "~2.4.9",
+    "oxlint": "^1.41.0",
+    "typescript": "~5.9.3"
   }
 }
