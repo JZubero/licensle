@@ -8,6 +8,7 @@ import prompts from 'prompts';
 import fs from 'node:fs';
 import os from 'node:os';
 import https from 'node:https';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pkg from './package.json' with { type: 'json' };
 
@@ -35,9 +36,20 @@ export interface CliOptions {
 interface DependencyManifest {
   dependencies?: Record<string, unknown>;
   require?: Record<string, unknown>;
+  replace?: Record<string, unknown>;
+  provide?: Record<string, unknown>;
   license?: string | string[] | { type: string };
   description?: string;
   repository?: string | { url: string };
+  source?: { url: string; reference?: string };
+  vendorDir?: string;
+  type?: string;
+}
+
+interface InstalledComposerPackage {
+  manifest: DependencyManifest;
+  directory: string | null;
+  dev: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -46,10 +58,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readManifest(filePath: string): DependencyManifest {
   const value: unknown = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  return parseManifest(value, filePath);
+}
+
+function parseManifest(value: unknown, filePath: string): DependencyManifest {
   if (!isRecord(value)) throw new Error(`Invalid dependency manifest: ${filePath}`);
 
   const manifest: DependencyManifest = {};
-  for (const key of ['dependencies', 'require'] as const) {
+  for (const key of ['dependencies', 'require', 'replace', 'provide'] as const) {
     if (value[key] !== undefined) {
       if (!isRecord(value[key])) throw new Error(`Invalid ${key} in ${filePath}`);
       manifest[key] = value[key];
@@ -66,7 +82,53 @@ function readManifest(filePath: string): DependencyManifest {
   else if (isRecord(value.repository) && typeof value.repository.url === 'string') {
     manifest.repository = { url: value.repository.url };
   }
+  if (typeof value.type === 'string') manifest.type = value.type;
+  if (isRecord(value.source) && typeof value.source.url === 'string') {
+    manifest.source = { url: value.source.url };
+    if (typeof value.source.reference === 'string') manifest.source.reference = value.source.reference;
+  }
+  if (isRecord(value.config) && value.config['vendor-dir'] !== undefined) {
+    if (typeof value.config['vendor-dir'] !== 'string' || !value.config['vendor-dir']) {
+      throw new Error(`Invalid config.vendor-dir in ${filePath}`);
+    }
+    manifest.vendorDir = value.config['vendor-dir'];
+  }
   return manifest;
+}
+
+function readComposerPackages(folder: string): Map<string, InstalledComposerPackage> {
+  const installedFile = path.join(folder, 'composer', 'installed.json');
+  const packages = new Map<string, InstalledComposerPackage>();
+  if (!fs.existsSync(installedFile)) return packages;
+  const value: unknown = JSON.parse(fs.readFileSync(installedFile, 'utf-8'));
+  const entries: unknown = Array.isArray(value) ? value : isRecord(value) ? value.packages : undefined;
+  if (!Array.isArray(entries)) throw new Error(`Invalid Composer installation metadata: ${installedFile}`);
+  const devPackages = isRecord(value) && Array.isArray(value['dev-package-names']) ? value['dev-package-names'] : [];
+  for (const entry of entries) {
+    if (!isRecord(entry) || typeof entry.name !== 'string') {
+      throw new Error(`Invalid Composer package in ${installedFile}`);
+    }
+    const manifest = parseManifest(entry, installedFile);
+    const installPath = entry['install-path'];
+    const directory = manifest.type === 'metapackage' || installPath === null ? null
+      : typeof installPath === 'string' ? path.resolve(path.dirname(installedFile), installPath)
+      : path.resolve(folder, entry.name);
+    packages.set(entry.name, { manifest, directory, dev: devPackages.includes(entry.name) });
+  }
+  return packages;
+}
+
+function githubRawUrl(repository: string): string | null {
+  const normalized = repository.replace(/^git\+/, '').replace(/^git@github.com:/, 'https://github.com/')
+    .replace(/^ssh:\/\/git@github.com\//, 'https://github.com/');
+  try {
+    const url = new URL(normalized);
+    const repositoryPath = url.pathname.replace(/\/$/, '').replace(/\.git$/, '');
+    if (url.hostname !== 'github.com' || !/^\/[^/]+\/[^/]+$/.test(repositoryPath)) return null;
+    return `https://raw.githubusercontent.com${repositoryPath}`;
+  } catch {
+    return null;
+  }
 }
 
 function licenseLabel(license: DependencyManifest['license']): string | null {
@@ -80,7 +142,7 @@ interface RequestResponse {
   data: string;
 }
 
-export const LICENSE_FILENAMES: string[] = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LICENSE.txt'];
+export const LICENSE_FILENAMES: string[] = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LICENSE.txt', 'LICENCE', 'LICENCE.md', 'LICENCE.txt', 'COPYING'];
 export const README_FILENAMES: string[] = ['README.md', 'readme.md', 'README', 'readme'];
 
 export async function main(options: CliOptions): Promise<void> {
@@ -114,14 +176,25 @@ export async function main(options: CliOptions): Promise<void> {
 
     const isPackageMode = (): boolean => sourceFile === 'package.json';
     const isComposerMode = (): boolean => sourceFile === 'composer.json';
-    const folder: string = isPackageMode() ? 'node_modules' : 'vendor';
-
     const manifest = readManifest('./' + sourceFile);
+    const configuredFolder = process.env.COMPOSER_VENDOR_DIR || manifest.vendorDir || 'vendor';
+    const folder = isPackageMode() ? 'node_modules' : configuredFolder.replace(/^(\$HOME|~)(?=[/\\]|$)/, () => os.homedir());
     let dependencies = Object.keys((isPackageMode() ? manifest.dependencies : manifest.require) ?? {});
     if (isComposerMode()) dependencies = dependencies.filter(d => d.indexOf('/') >= 0);
-    if (dependencies.length > 0 && !fs.existsSync(`./${folder}`)) {
+    if (dependencies.length > 0 && !fs.existsSync(folder)) {
       console.error(chalk.red(`There is no dependency folder (${folder}/) in the current directory.`));
       return;
+    }
+    const composerPackages = isComposerMode() ? readComposerPackages(folder) : new Map<string, InstalledComposerPackage>();
+    if (isComposerMode()) {
+      dependencies = [...new Set(dependencies.flatMap(dependency => {
+        if (composerPackages.has(dependency)) return [dependency];
+        const providers = [...composerPackages].filter(([, item]) => !item.dev &&
+          (item.manifest.replace?.[dependency] !== undefined || item.manifest.provide?.[dependency] !== undefined));
+        if (providers.length === 0) return [dependency];
+        if (options.verbose) console.log(chalk.blueBright(`${dependency} is provided or replaced by ${providers.map(([name]) => name).join(', ')}`));
+        return providers.map(([name]) => name);
+      }))];
     }
     console.log(chalk.magentaBright(`Found ${dependencies.length} dependencies.`));
 
@@ -131,11 +204,6 @@ export async function main(options: CliOptions): Promise<void> {
     });
     if (!options.verbose) spinner.start();
 
-    const sanitizeLicenseLabel = (label: string | null): string | null => {
-      if (!label) return null;
-      return label.replace('-', ' ');
-    };
-
     const licenseItems: LicenseItem[] = [];
     const licenseDownloads: { [url: string]: string } = {};
     const failures: string[] = [];
@@ -144,28 +212,50 @@ export async function main(options: CliOptions): Promise<void> {
     let readmeLicenseCounter = 0;
 
     for (const dependency of dependencies) {
+      let licenseItem: LicenseItem = { module: dependency, type: null, description: null };
       try {
-        const dependencyFolder = fs.existsSync(`./${folder}/${dependency}`) ?
-          `./${folder}/${dependency}` :
-          `./${dependency.split('/').reverse()[0]}`;
-        const dependencyFolderFiles = fs.readdirSync(dependencyFolder);
-        const descriptionFile = readManifest(`./${dependencyFolder}/${sourceFile}`);
-
-        const licenseItem: LicenseItem = {
+        const installed = composerPackages.get(dependency);
+        const defaultFolder = path.join(folder, dependency);
+        const dependencyFolder = installed ? installed.directory :
+          isPackageMode() && !fs.existsSync(defaultFolder) ? `./${dependency.split('/').reverse()[0]}` : defaultFolder;
+        const descriptionFile = installed ? installed.manifest : readManifest(path.join(dependencyFolder ?? '', sourceFile));
+        licenseItem = {
           module: dependency,
-          type: sanitizeLicenseLabel(licenseLabel(descriptionFile.license)),
+          type: licenseLabel(descriptionFile.license),
           description: descriptionFile.description || null
         };
+        if (dependencyFolder === null) {
+          licenseItems.push(licenseItem);
+          continue;
+        }
+        const dependencyFolderFiles = fs.readdirSync(dependencyFolder);
 
-        const licenseFile = LICENSE_FILENAMES.find(f => dependencyFolderFiles.includes(f));
+        const licenseFile = dependencyFolderFiles.find(file => LICENSE_FILENAMES.some(candidate => candidate.toLowerCase() === file.toLowerCase()));
         if (licenseFile) {
+          licenseItem.license = fs.readFileSync(path.join(dependencyFolder, licenseFile), 'utf-8');
           licenseFileCounter++;
-          licenseItem.license = fs.readFileSync(`./${dependencyFolder}/${licenseFile}`, 'utf-8');
           licenseItems.push(licenseItem);
           continue;
         }
 
-        if ((isPackageMode() && descriptionFile.repository) || isComposerMode()) {
+        const readmeFile = dependencyFolderFiles.find(file => README_FILENAMES.some(candidate => candidate.toLowerCase() === file.toLowerCase()));
+        if (readmeFile) {
+          const readmeContent = fs.readFileSync(path.join(dependencyFolder, readmeFile), 'utf-8');
+          const licenseSection = readmeContent.match(/#+ \b(License|Licence)\b\s*([\s\S]*)/i);
+          if (licenseSection && licenseSection[2]) {
+            readmeLicenseCounter++;
+            licenseItem.license = licenseSection[2].trim();
+            licenseItems.push(licenseItem);
+            continue;
+          }
+        }
+
+        const repository = isComposerMode() ? descriptionFile.source?.url :
+          typeof descriptionFile.repository === 'string' ? descriptionFile.repository : descriptionFile.repository?.url;
+        const rawUrl = repository ? githubRawUrl(repository) : null;
+        const references = isComposerMode() ? descriptionFile.source?.reference ? [descriptionFile.source.reference] : []
+          : ['main', 'master', 'dev', 'develop'];
+        if (rawUrl && references.length > 0) {
           const fetchLicenseFileFromRepo = async (url: string): Promise<RequestResponse> => {
             let message = `Trying to fetch license file from "${url}"... `;
             const response = await request(url);
@@ -174,28 +264,23 @@ export async function main(options: CliOptions): Promise<void> {
             return response;
           };
 
-          let rawUrl: string;
-          if (isPackageMode()) {
-            const repository = descriptionFile.repository;
-            const url = typeof repository === 'string' ? repository : repository?.url;
-            if (!url) throw new Error(`Missing repository URL for ${dependency}`);
-            const repoUrl = url.replace(/^git\+/, '').replace(/\.git$/, '').replace('ssh://git@', 'https://');
-            rawUrl = repoUrl.replace('https://github.com', 'https://raw.githubusercontent.com');
-          } else {
-            rawUrl = `https://raw.githubusercontent.com/${dependency}`;
-          }
-
-          for (const branch of ['main', 'master', 'dev', 'develop']) {
+          download: for (const reference of references) {
             for (const licenseFilename of LICENSE_FILENAMES) {
-              const fullRequestUrl = `${rawUrl}/${branch}/${licenseFilename}`;
+              const fullRequestUrl = `${rawUrl}/${encodeURIComponent(reference)}/${licenseFilename}`;
               if (licenseDownloads[fullRequestUrl]) {
                 licenseDownloadCounter++;
                 licenseItem.license = licenseDownloads[fullRequestUrl];
                 licenseItems.push(licenseItem);
                 break;
               } else {
-                const response = await fetchLicenseFileFromRepo(fullRequestUrl);
-                if (response.code === 200) {
+                let response: RequestResponse;
+                try {
+                  response = await fetchLicenseFileFromRepo(fullRequestUrl);
+                } catch (error: unknown) {
+                  if (options.verbose) console.warn(chalk.red(`Could not download license for ${dependency}: ${error instanceof Error ? error.message : String(error)}`));
+                  break download;
+                }
+                if (response.code === 200 && response.data.trim()) {
                   licenseDownloadCounter++;
                   licenseItem.license = response.data;
                   licenseDownloads[fullRequestUrl] = response.data;
@@ -209,22 +294,12 @@ export async function main(options: CliOptions): Promise<void> {
           if (licenseItem.license) continue;
         }
 
-        const readmeFile = README_FILENAMES.find(f => dependencyFolderFiles.includes(f));
-        if (readmeFile) {
-          const readmeContent = fs.readFileSync(`./${dependencyFolder}/${readmeFile}`, 'utf-8');
-          const licenseSection = readmeContent.match(/#+ \b(License|Licence)\b\s*([\s\S]*)/i);
-          if (licenseSection && licenseSection[2]) {
-            readmeLicenseCounter++;
-            licenseItem.license = licenseSection[2].trim();
-            licenseItems.push(licenseItem);
-            continue;
-          }
-        }
-
         failures.push(dependency);
         if (options.verbose) console.warn(chalk.red('No file or download available for "%s"'), dependency);
         licenseItems.push(licenseItem);
       } catch (error: unknown) {
+        failures.push(dependency);
+        licenseItems.push(licenseItem);
         if (options.verbose) console.warn(chalk.red('Could not scan "%s"'), dependency, error instanceof Error ? error.message : String(error));
       }
     }
@@ -246,7 +321,7 @@ export async function main(options: CliOptions): Promise<void> {
     if (options.info) {
       const licenseInfo: LicenseInfo = licenseItems.reduce((result: LicenseInfo, current) => {
         if (!current.type) return result;
-        const licenseType = sanitizeLicenseLabel(current.type) || 'unknown';
+        const licenseType = current.type;
         (result[licenseType] ??= []).push(current.module);
         return result;
       }, {});
@@ -292,12 +367,12 @@ export async function main(options: CliOptions): Promise<void> {
 
 async function request(url: string): Promise<RequestResponse> {
   return new Promise((resolve, reject) => {
-    https.get(url, (response) => {
+    https.get(url, { signal: AbortSignal.timeout(5_000) }, (response) => {
       let data = '';
       response.on('data', (chunk) => data += chunk);
+      response.on('error', reject);
       response.on('end', () => resolve({ code: response.statusCode || 500, data }));
     }).on('error', (err) => {
-      console.warn(chalk.red('Error requesting url "%s"'), url, err);
       reject(err);
     });
   });

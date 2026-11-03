@@ -94,7 +94,7 @@ Tests are typechecked but excluded from the published artifact.
 Verified locally:
 
 - Frozen-lockfile installation with pnpm 10.34.9.
-- Typecheck, lint, all 15 tests, production build, and compiled CLI help
+- Typecheck, lint, all 42 tests, production build, and compiled CLI help
   on the pinned Node 26.13.0 runtime.
 - Earlier migration checks also passed on Node 24.15.0 and 22.12.0, before
   pinning the project to Node 26.13.0.
@@ -105,6 +105,14 @@ Verified locally:
 - Node.js CLI integration checks cover npm and pnpm layouts with scoped
   dependencies, projects without production dependencies or `node_modules`,
   and the default browser confirmation.
+- Composer CLI checks cover Composer 1/2 metadata, custom vendor directories,
+  installer paths, symlinked packages, metapackages, installed replacements and
+  providers, platform-only projects, and retained missing-license records.
+- Compiled CLI checks against projects installed by Composer 2.10.3: a local
+  path repository with a custom vendor directory and metapackage, plus real
+  Packagist installations of Monolog 3.12.1 and PSR Log 3.0.2.
+- Mocked download checks verify the actual repository and installed revision,
+  HTTPS/SSH GitHub URL forms, failure handling, and the bounded request signal.
 
 Interactive browser launch and live repository downloads were not exercised.
 
@@ -126,6 +134,7 @@ pnpm pack --pack-destination /tmp/licensle-package-check
 ```
 
 Node.js projects scan `package.json.dependencies` and installed `node_modules`;
-Composer projects scan `composer.json.require` and `vendor`. Development
+Composer projects scan `composer.json.require` and the configured vendor directory,
+using installed metadata for package paths and license declarations. Development
 dependencies are excluded. An empty production dependency set no longer
 requires an installed dependency directory.

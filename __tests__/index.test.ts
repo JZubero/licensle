@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { PathLike, PathOrFileDescriptor } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import { main } from '../index.js';
 import prompts from 'prompts';
 
@@ -11,7 +12,12 @@ const fs = vi.hoisted(() => ({
   realpathSync: vi.fn(),
 }));
 
+const network = vi.hoisted(() => ({
+  get: vi.fn<(url: string, options: { signal: AbortSignal }, callback: (response: EventEmitter & { statusCode: number }) => void) => EventEmitter>(),
+}));
+
 vi.mock('node:fs', () => ({ default: fs }));
+vi.mock('node:https', () => ({ default: network }));
 vi.mock('prompts');
 
 function mockFiles(files: Record<string, string>, rootManifest = '{"dependencies":{"test-dep":"1.0.0"}}') {
@@ -27,6 +33,14 @@ function mockFiles(files: Record<string, string>, rootManifest = '{"dependencies
     }
     throw new Error(`Unexpected file read: ${name}`);
   });
+}
+
+function mockComposerSource(source?: { url: string; reference?: string }): void {
+  fs.existsSync.mockImplementation(file => ['./composer.json', 'vendor', 'vendor/composer/installed.json'].includes(file.toString()));
+  fs.readdirSync.mockReturnValue([]);
+  fs.readFileSync.mockImplementation(file => file.toString() === './composer.json'
+    ? JSON.stringify({ require: { 'example/library': '^1.0' } })
+    : JSON.stringify({ packages: [{ name: 'example/library', license: 'MIT', source, 'install-path': '../example/library' }] }));
 }
 
 describe('main', () => {
@@ -90,7 +104,7 @@ describe('main', () => {
   });
 
   it('reads Composer license arrays and excludes PHP platform requirements', async () => {
-    fs.existsSync.mockImplementation((path) => !path.toString().includes('package.json') && !path.toString().includes('node_modules'));
+    fs.existsSync.mockImplementation((path) => path.toString() === './composer.json' || path.toString() === 'vendor');
     fs.readdirSync.mockReturnValue(['composer.json', 'LICENSE']);
     fs.readFileSync.mockImplementation((path) => {
       if (path.toString() === './composer.json') {
@@ -103,7 +117,7 @@ describe('main', () => {
     });
     await main({ verbose: true, info: true, generate: true, browser: false, outputFilePath: '/tmp/composer-licenses.html' });
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Found 1 dependencies.'));
-    expect(fs.writeFileSync).toHaveBeenCalledWith('/tmp/composer-licenses.html', expect.stringContaining('MIT OR Apache 2.0'), 'utf-8');
+    expect(fs.writeFileSync).toHaveBeenCalledWith('/tmp/composer-licenses.html', expect.stringContaining('MIT OR Apache-2.0'), 'utf-8');
     expect(console.error).not.toHaveBeenCalled();
   });
 
@@ -114,6 +128,86 @@ describe('main', () => {
       : path.toString().endsWith('/package.json') ? '{"license":{"type":"MIT"}}' : 'License text');
     await main({ verbose: true, info: true });
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('MIT (1 usages)'));
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'https://github.com/actual-owner/actual-repository.git',
+    'git@github.com:actual-owner/actual-repository.git',
+    'ssh://git@github.com/actual-owner/actual-repository.git',
+  ])('downloads the installed Composer revision from source metadata: %s', async (url) => {
+    mockComposerSource({ url, reference: 'installed-commit' });
+    network.get.mockImplementation((_url, _options, callback) => {
+      const response = Object.assign(new EventEmitter(), { statusCode: 200 });
+      callback(response);
+      queueMicrotask(() => {
+        response.emit('data', 'Pinned revision license.');
+        response.emit('end');
+      });
+      return new EventEmitter();
+    });
+
+    await main({ verbose: true, generate: true, browser: false });
+
+    expect(network.get).toHaveBeenCalledExactlyOnceWith(
+      'https://raw.githubusercontent.com/actual-owner/actual-repository/installed-commit/LICENSE',
+      { signal: expect.any(AbortSignal) },
+      expect.any(Function),
+    );
+    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('Pinned revision license.'), 'utf-8');
+  });
+
+  it('retains a Composer dependency and its license label if a download fails', async () => {
+    mockComposerSource({ url: 'https://github.com/owner/repository.git', reference: 'installed-commit' });
+    network.get.mockImplementation(() => {
+      const request = new EventEmitter();
+      queueMicrotask(() => request.emit('error', new Error('Offline')));
+      return request;
+    });
+
+    await main({ verbose: true, generate: true, browser: false });
+
+    expect(network.get).toHaveBeenCalledTimes(1);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('No license file found (1)'));
+    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('<strong>MIT</strong>'), 'utf-8');
+    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('example/library'), 'utf-8');
+  });
+
+  it.each([
+    undefined,
+    { url: 'https://github.com/owner/repository.git' },
+    { url: 'https://gitlab.com/owner/repository.git', reference: 'installed-commit' },
+  ])('does not guess GitHub repositories or revisions from Composer package names: %j', async (source) => {
+    mockComposerSource(source);
+
+    await main({ verbose: true });
+
+    expect(network.get).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('No license file found (1)'));
+  });
+
+  it.each([{}, null, { packages: {} }, [null]])('rejects invalid installed Composer metadata: %j', async (metadata) => {
+    mockComposerSource();
+    fs.readFileSync.mockImplementation(file => file.toString() === './composer.json'
+      ? '{"require":{"example/library":"^1.0"}}' : JSON.stringify(metadata));
+
+    await main({ verbose: true });
+
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Invalid Composer'));
+    expect(network.get).not.toHaveBeenCalled();
+  });
+
+  it('scans Composer when selected in a project that also has package.json', async () => {
+    fs.existsSync.mockImplementation(file => ['./package.json', './composer.json', 'vendor'].includes(file.toString()));
+    vi.mocked(prompts).mockResolvedValue({ sourceFile: 'composer.json' });
+    fs.readFileSync.mockImplementation(file => file.toString() === './composer.json'
+      ? '{"require":{"example/library":"^1.0"}}' : file.toString().endsWith('composer.json') ? '{"license":"MIT"}' : 'PHP license text.');
+    fs.readdirSync.mockReturnValue(['composer.json', 'LICENSE']);
+
+    await main({ verbose: true, generate: true, browser: false });
+
+    expect(fs.readFileSync).not.toHaveBeenCalledWith('./package.json', 'utf-8');
+    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('PHP license text.'), 'utf-8');
     expect(console.error).not.toHaveBeenCalled();
   });
 });
