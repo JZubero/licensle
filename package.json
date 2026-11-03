@@ -3,7 +3,17 @@
   "version": "0.2.0",
   "description": "A command-line tool for collecting dependency licenses from a project.",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/package.json",
+    "DEPENDENCY_AUDIT.md"
+  ],
   "type": "module",
+  "engines": {
+    "node": "26.13.0"
+  },
   "keywords": [
     "license",
     "parser"
@@ -21,23 +31,25 @@
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "typecheck": "tsc --noEmit --pretty",
-    "build": "tsc",
-    "test": "vitest"
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepack": "pnpm build"
   },
-  "packageManager": "pnpm@10.6.5",
+  "packageManager": "pnpm@10.34.9",
   "dependencies": {
-    "chalk": "~5.6.2",
-    "commander": "~14.0.2",
-    "open": "^11.0.0",
-    "ora": "~9.1.0",
+    "chalk": "~6.0.1",
+    "commander": "~15.0.0",
+    "open": "^11.0.4",
+    "ora": "~10.0.0",
     "prompts": "~2.4.2",
     "yesno": "~0.4.0"
   },
   "devDependencies": {
-    "@types/node": "^24.1.0",
+    "@types/node": "^26.6.6",
     "@types/prompts": "~2.4.9",
-    "oxlint": "^1.41.0",
-    "typescript": "~5.9.3",
-    "vitest": "^2.0.4"
+    "oxlint": "^1.91.0",
+    "typescript": "~7.0.2",
+    "vitest": "~5.1.0"
   }
 }
