@@ -31,6 +31,26 @@ Options:
   -h, --help                   output usage information
 ```
 
+## Copyleft warnings
+
+Every scan automatically prints a highlighted `COPYLEFT WARNING` block to stderr
+when declared dependency licenses include recognized copyleft identifiers. It
+lists the affected packages and their complete license expressions, with or
+without `--info` or `--verbose`. The warning appears after the spinner finishes
+so it stays visible, using a bold yellow banner when terminal colors are enabled.
+
+Detection covers GPL, LGPL, AGPL, MPL, EPL, CPL, CDDL, EUPL, and OSL identifiers,
+including deprecated GNU `+` and exception forms. Composer license arrays and
+SPDX `AND`, `OR`, and `WITH` expressions are supported. An `OR` alternative or
+exception may affect which terms apply; the warning preserves the expression
+for review. See the [SPDX expression specification](https://spdx.github.io/spdx-spec/v2.3.1/SPDX-license-expressions/)
+and [GNU license classifications](https://www.gnu.org/licenses/license-list.html).
+
+Detection uses declared license metadata. Custom `LicenseRef` labels, missing
+metadata, and other unrecognized licenses are not classified; the absence of a
+warning does not classify a license as permissive. Scanning and report generation
+continue after the warning.
+
 ## Composer support
 
 The scanner reads production `require` entries and excludes platform requirements

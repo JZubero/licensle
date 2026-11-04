@@ -94,7 +94,7 @@ Tests are typechecked but excluded from the published artifact.
 Verified locally:
 
 - Frozen-lockfile installation with pnpm 10.34.9.
-- Typecheck, lint, all 42 tests, production build, and compiled CLI help
+- Typecheck, lint, all 78 tests, production build, and compiled CLI help
   on the pinned Node 26.13.0 runtime.
 - Earlier migration checks also passed on Node 24.15.0 and 22.12.0, before
   pinning the project to Node 26.13.0.
@@ -113,6 +113,10 @@ Verified locally:
   Packagist installations of Monolog 3.12.1 and PSR Log 3.0.2.
 - Mocked download checks verify the actual repository and installed revision,
   HTTPS/SSH GitHub URL forms, failure handling, and the bounded request signal.
+- Copyleft warning checks cover recognized identifiers, SPDX expressions and
+  arrays, permissive and custom-label exclusions, default and verbose scans,
+  ANSI highlighting and plain output, Composer metapackages, and continued
+  report generation.
 
 Interactive browser launch and live repository downloads were not exercised.
 

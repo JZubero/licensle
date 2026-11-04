@@ -20,12 +20,12 @@ vi.mock('node:fs', () => ({ default: fs }));
 vi.mock('node:https', () => ({ default: network }));
 vi.mock('prompts');
 
-function mockFiles(files: Record<string, string>, rootManifest = '{"dependencies":{"test-dep":"1.0.0"}}') {
+function mockFiles(files: Record<string, string>, rootManifest = '{"dependencies":{"test-dep":"1.0.0"}}', license: unknown = 'MIT') {
   fs.readdirSync.mockReturnValue(['package.json', ...Object.keys(files)]);
   fs.readFileSync.mockImplementation((path) => {
     const name = path.toString();
     if (name.includes('node_modules/test-dep/package.json')) {
-      return JSON.stringify({ license: 'MIT', description: 'A test dependency' });
+      return JSON.stringify({ license, description: 'A test dependency' });
     }
     if (name === './package.json') return rootManifest;
     for (const [filename, content] of Object.entries(files)) {
@@ -35,12 +35,12 @@ function mockFiles(files: Record<string, string>, rootManifest = '{"dependencies
   });
 }
 
-function mockComposerSource(source?: { url: string; reference?: string }): void {
+function mockComposerSource(source?: { url: string; reference?: string }, license = 'MIT'): void {
   fs.existsSync.mockImplementation(file => ['./composer.json', 'vendor', 'vendor/composer/installed.json'].includes(file.toString()));
   fs.readdirSync.mockReturnValue([]);
   fs.readFileSync.mockImplementation(file => file.toString() === './composer.json'
     ? JSON.stringify({ require: { 'example/library': '^1.0' } })
-    : JSON.stringify({ packages: [{ name: 'example/library', license: 'MIT', source, 'install-path': '../example/library' }] }));
+    : JSON.stringify({ packages: [{ name: 'example/library', license, source, 'install-path': '../example/library' }] }));
 }
 
 describe('main', () => {
@@ -129,6 +129,53 @@ describe('main', () => {
     await main({ verbose: true, info: true });
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('MIT (1 usages)'));
     expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'GPL', 'GPL-2.0', 'GPL-3.0-only', 'GPL-2.0+',
+    'LGPL-2.1-or-later', 'AGPL-3.0-only', 'MPL-2.0',
+    'MPL-2.0-no-copyleft-exception', 'EPL-2.0', 'CDDL-1.0',
+    'CPL-1.0', 'EUPL-1.2', 'OSL-3.0', 'gpl-3.0-only',
+    'MIT OR GPL-3.0-only', '(Apache-2.0 AND LGPL-2.1-only)',
+    'GPL-2.0-only WITH Classpath-exception-2.0', 'GPL-2.0-with-classpath-exception',
+  ])('warns about the declared copyleft license: %s', async (license) => {
+    mockFiles({ LICENSE: 'License text.' }, undefined, license);
+
+    await main({ verbose: true });
+
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('COPYLEFT WARNING'));
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining(`test-dep: ${license}`));
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('OR alternatives and WITH exceptions'));
+  });
+
+  it.each([
+    'MIT', 'Apache-2.0', 'BSD-3-Clause', 'ISC', 'AFL-3.0',
+    'MIT OR Apache-2.0', 'LicenseRef-GPL-3.0-only',
+    'DocumentRef-example:LicenseRef-GPL-2.0', 'UNLICENSED', null,
+  ])('does not label permissive or unrecognized licenses as copyleft: %s', async (license) => {
+    mockFiles({ LICENSE: 'License text.' }, undefined, license);
+
+    await main({ verbose: true });
+
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('warns for a dual-license array while retaining its permissive alternative', async () => {
+    mockFiles({ LICENSE: 'License text.' }, undefined, ['MIT', 'GPL-3.0-only']);
+
+    await main({ verbose: true });
+
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('test-dep: MIT OR GPL-3.0-only'));
+  });
+
+  it('warns when Composer license metadata is present but license text is missing', async () => {
+    mockComposerSource(undefined, 'GPL-2.0-only');
+
+    await main({ verbose: true });
+
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('COPYLEFT WARNING'));
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('example/library: GPL-2.0-only'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('No license file found (1)'));
   });
 
   it.each([

@@ -137,6 +137,27 @@ function licenseLabel(license: DependencyManifest['license']): string | null {
   return license?.type ?? null;
 }
 
+// Common software copyleft licenses; classify declared identifiers, not license prose.
+const COPYLEFT_LICENSES = new Set([
+  'GPL', 'GPL-1.0', 'GPL-2.0', 'GPL-3.0',
+  'LGPL', 'LGPL-2.0', 'LGPL-2.1', 'LGPL-3.0',
+  'AGPL', 'AGPL-1.0', 'AGPL-3.0',
+  'MPL-1.0', 'MPL-1.1', 'MPL-2.0', 'MPL-2.0-NO-COPYLEFT-EXCEPTION',
+  'EPL-1.0', 'EPL-2.0', 'CPL-1.0', 'CDDL-1.0', 'CDDL-1.1',
+  'EUPL-1.0', 'EUPL-1.1', 'EUPL-1.2',
+  'OSL-1.0', 'OSL-1.1', 'OSL-2.0', 'OSL-2.1', 'OSL-3.0',
+]);
+
+function hasCopyleftLicense(label: string | null): boolean {
+  const identifiers = label?.match(/[a-z0-9][a-z0-9.+:-]*/gi) ?? [];
+  return identifiers.some(identifier => {
+    const normalized = identifier.toUpperCase().replace(/(?:-ONLY|-OR-LATER|\+)$/, '');
+    if (COPYLEFT_LICENSES.has(normalized)) return true;
+    // Deprecated SPDX GNU identifiers sometimes encode the exception in the name.
+    return /^(?:A?GPL|LGPL)-(?:1\.0|2\.0|2\.1|3\.0)-WITH-[A-Z0-9.-]+-EXCEPTION$/.test(normalized);
+  });
+}
+
 interface RequestResponse {
   code: number;
   data: string;
@@ -304,6 +325,16 @@ export async function main(options: CliOptions): Promise<void> {
       }
     }
     if (!options.verbose) spinner.succeed(chalk.magentaBright(`Scanning ${folder}/... done!`));
+
+    const copyleftItems = licenseItems.filter(item => hasCopyleftLicense(item.type));
+    if (copyleftItems.length > 0) {
+      console.warn(chalk.bgYellow.black.bold(' COPYLEFT WARNING '));
+      console.warn(chalk.yellow.bold(`Copyleft licenses detected in ${copyleftItems.length} ${copyleftItems.length === 1 ? 'dependency' : 'dependencies'}:`));
+      for (const item of copyleftItems) {
+        console.warn(chalk.yellow(` - ${item.module}: ${item.type}`));
+      }
+      console.warn(chalk.yellow('Review the declared terms, including any OR alternatives and WITH exceptions.'));
+    }
 
     console.log(chalk.magentaBright('The following licenses are used:'),
       [...new Set(licenseItems.map(i => i.type))].filter(i => i).join(', ')
