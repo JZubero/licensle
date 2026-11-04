@@ -1,8 +1,19 @@
 {
   "name": "licensle",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "A command-line tool for collecting dependency licenses from a project.",
-  "main": "index.js",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/package.json",
+    "DEPENDENCY_AUDIT.md"
+  ],
+  "type": "module",
+  "engines": {
+    "node": "26.13.0"
+  },
   "keywords": [
     "license",
     "parser"
@@ -14,14 +25,34 @@
   "author": "Julian Scheuchenzuber <js@lvl51.de>",
   "license": "MIT",
   "bin": {
-    "licensle": "./index.js"
+    "licensle": "./dist/index.js"
   },
+  "scripts": {
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "typecheck": "tsc --noEmit --pretty",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepack": "pnpm build"
+  },
+  "packageManager": "pnpm@10.34.9",
   "dependencies": {
-    "chalk": "2.4.2",
-    "commander": "3.0.2",
-    "opn": "6.0.0",
-    "ora": "4.0.2",
-    "prompts": "^2.2.1",
-    "yesno": "0.3.1"
+    "chalk": "~6.0.1",
+    "commander": "~15.0.0",
+    "open": "^11.0.4",
+    "ora": "~10.0.0",
+    "prompts": "~2.4.2",
+    "spdx-expression-parse": "^5.0.0",
+    "yaml": "^2.9.1",
+    "yesno": "~0.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/prompts": "~2.4.9",
+    "@types/spdx-expression-parse": "^4.0.0",
+    "oxlint": "^1.91.0",
+    "typescript": "~7.0.2",
+    "vitest": "~5.1.0"
   }
 }
