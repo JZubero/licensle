@@ -1,6 +1,6 @@
 {
   "name": "licensle",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "A command-line tool for collecting dependency licenses from a project.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
