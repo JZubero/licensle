@@ -36,7 +36,7 @@ function mockFiles(files: Record<string, string>, rootManifest = '{"dependencies
   });
 }
 
-function mockComposerSource(source?: { url: string; reference?: string }, license = 'MIT'): void {
+function mockComposerSource(source?: { url: string; reference?: string }, license: unknown = 'MIT'): void {
   fs.existsSync.mockImplementation(file => ['./composer.json', 'vendor', 'vendor/composer/installed.json'].includes(file.toString()));
   fs.readdirSync.mockReturnValue([]);
   fs.readFileSync.mockImplementation(file => file.toString() === './composer.json'
@@ -97,7 +97,7 @@ describe('main', () => {
   });
 
   it('stops cleanly when source selection is cancelled', async () => {
-    fs.existsSync.mockReturnValue(true);
+    fs.existsSync.mockImplementation(file => ['./package.json', './composer.json', 'node_modules', 'vendor'].includes(file.toString()));
     vi.mocked(prompts).mockResolvedValue({});
     await main({ verbose: true });
     expect(fs.readFileSync).not.toHaveBeenCalled();
@@ -133,7 +133,7 @@ describe('main', () => {
   });
 
   it('applies manual selections before the summary, copyleft warning, and HTML output', async () => {
-    mockFiles({ LICENSE: 'Existing notice.' }, undefined, null, {
+    mockFiles({}, undefined, null, {
       version: '1.2.3', gitHead: 'release/ref',
       repository: { url: 'git+https://github.com/owner/repository.git', directory: 'packages/library' },
     });
@@ -146,24 +146,24 @@ describe('main', () => {
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('GPL-3.0-only OR MIT (1 usages)'));
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('test-dep: GPL-3.0-only OR MIT'));
     expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('License selected manually.'), 'utf-8');
-    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('Existing notice.'), 'utf-8');
+    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('No full license text supplied.'), 'utf-8');
     expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('Original declaration: not specified'), 'utf-8');
   });
 
   it('does not count a manually chosen identifier as recovered license text', async () => {
-    mockComposerSource(undefined, 'BSD');
+    mockComposerSource(undefined, null);
     vi.mocked(prompts).mockResolvedValueOnce({ license: 'BSD-3-Clause', licenseFile: '' });
 
     await main({ verbose: true, reviewLicenses: true, generate: true, browser: false });
 
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('No license file found (1)'));
     expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('No full license text supplied.'), 'utf-8');
-    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('Original declaration: BSD.'), 'utf-8');
+    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('Original declaration: not specified.'), 'utf-8');
     expect(console.log).toHaveBeenCalledWith('Package: https://packagist.org/packages/example/library');
   });
 
   it('imports a supplied notice, escapes its contents, and clears the missing-text entry', async () => {
-    mockFiles({ 'manual-notice.txt': 'Copyright <example> & notice text.' }, undefined, 'BSD');
+    mockFiles({ 'manual-notice.txt': 'Copyright <example> & notice text.' }, undefined, null);
     vi.mocked(prompts).mockResolvedValueOnce({ license: 'BSD-3-Clause', licenseFile: '/tmp/manual-notice.txt' });
 
     await main({ verbose: true, reviewLicenses: true, generate: true, browser: false });
@@ -176,7 +176,7 @@ describe('main', () => {
   });
 
   it('rejects ambiguous or invalid manual expressions and validates notice paths', async () => {
-    mockFiles({ LICENSE: 'Existing notice.' }, undefined, null);
+    mockFiles({ 'manual-notice.txt': 'Existing notice.' }, undefined, null);
     vi.mocked(prompts).mockResolvedValueOnce({ license: '' });
     await main({ verbose: true, reviewLicenses: true });
     const questions = vi.mocked(prompts).mock.calls[0]?.[0];
@@ -195,7 +195,7 @@ describe('main', () => {
     fs.statSync.mockReturnValue({ isFile: () => false });
     expect(fileQuestion.validate('/tmp/directory', {}, fileQuestion)).toEqual(expect.any(String));
     fs.statSync.mockReturnValue({ isFile: () => true });
-    expect(fileQuestion.validate('/tmp/LICENSE', {}, fileQuestion)).toBe(true);
+    expect(fileQuestion.validate('/tmp/manual-notice.txt', {}, fileQuestion)).toBe(true);
     if (typeof fileQuestion.type !== 'function') throw new Error('Expected conditional notice prompt');
     expect(fileQuestion.type('', {}, fileQuestion)).toBeNull();
     expect(fileQuestion.type(':done', {}, fileQuestion)).toBeNull();
@@ -213,7 +213,7 @@ describe('main', () => {
   });
 
   it('discards a partial answer on cancellation and still produces the report', async () => {
-    mockFiles({}, undefined, 'BSD');
+    mockFiles({}, undefined, null);
     vi.mocked(prompts).mockImplementationOnce(async (_questions, options) => {
       options?.onCancel?.({ type: 'text', name: 'licenseFile' }, {});
       return { license: 'GPL-3.0-only' };
@@ -223,11 +223,11 @@ describe('main', () => {
 
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Manual review stopped.'));
     expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining('COPYLEFT WARNING'));
-    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('<strong>BSD</strong>'), 'utf-8');
+    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('No license file provided.'), 'utf-8');
   });
 
   it('strips credentials from repository links displayed for manual review', async () => {
-    mockFiles({ LICENSE: 'Notice.' }, undefined, null, {
+    mockFiles({}, undefined, null, {
       repository: 'https://user:SHOULD_NOT_LEAK@gitlab.example.com/group/repo.git?token=SHOULD_NOT_LEAK', gitHead: 'abcdef',
     });
     vi.mocked(prompts).mockResolvedValueOnce({ license: ':skip' });
@@ -244,6 +244,117 @@ describe('main', () => {
     await main({ verbose: true, reviewLicenses: false });
 
     expect(prompts).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('No license file found (1)'));
+  });
+
+  it.each([null, 'SEE LICENSE IN LICENSE'])('does not prompt when local license text is available despite metadata %j', async type => {
+    mockFiles({ LICENSE: 'Publisher license terms.' }, undefined, type);
+
+    await main({ verbose: true, reviewLicenses: true, info: true });
+
+    expect(prompts).not.toHaveBeenCalled();
+    if (!type) expect(console.log).toHaveBeenCalledWith(expect.stringContaining('License text available (unclassified) (1 usages)'));
+  });
+
+  it('does not prompt when a README license section supplies the information', async () => {
+    mockFiles({ 'README.md': '# Library\n\n## License\nPublisher license terms.' }, undefined, null);
+
+    await main({ verbose: true, reviewLicenses: true });
+
+    expect(prompts).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Found 1 licenses in README files'));
+  });
+
+  it('does not prompt when upstream license text was downloaded without a manifest license field', async () => {
+    mockComposerSource({ url: 'https://github.com/owner/repository.git', reference: 'installed-commit' }, null);
+    network.get.mockImplementation((_url, _options, callback) => {
+      const response = Object.assign(new EventEmitter(), { statusCode: 200 });
+      callback(response);
+      queueMicrotask(() => {
+        response.emit('data', 'Version-matched upstream license terms.');
+        response.emit('end');
+      });
+      return new EventEmitter();
+    });
+
+    await main({ verbose: true, reviewLicenses: true, generate: true, browser: false });
+
+    expect(prompts).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Downloaded 1 license files'));
+    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('Version-matched upstream license terms.'), 'utf-8');
+  });
+
+  it.each(['MIT', 'BSD-3-Clause', 'BSD', 'LicenseRef-Publisher', 'proprietary'])('retains missing-text status without prompting when the declaration provides information: %s', async type => {
+    mockFiles({}, undefined, type);
+
+    await main({ verbose: true, reviewLicenses: true });
+
+    expect(prompts).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('No license file found (1)'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('The following licenses are used:'), type);
+  });
+
+  it('treats UNLICENSED as an explicit absence of a license grant without requesting a notice file', async () => {
+    mockFiles({}, undefined, 'UNLICENSED', { repository: 'https://github.com/owner/repo' });
+
+    await main({ verbose: true, reviewLicenses: true, generate: true, browser: false });
+
+    expect(prompts).not.toHaveBeenCalled();
+    expect(network.get).not.toHaveBeenCalled();
+    expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('No license file found'));
+    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('No license grant (UNLICENSED).'), 'utf-8');
+  });
+
+  it('applies the same no-grant semantics to a manually selected UNLICENSED label', async () => {
+    mockFiles({}, undefined, null);
+    vi.mocked(prompts).mockResolvedValueOnce({ license: 'UNLICENSED', licenseFile: '' });
+
+    await main({ verbose: true, reviewLicenses: true, generate: true, browser: false });
+
+    expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('No license file found'));
+    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('No license grant (UNLICENSED).'), 'utf-8');
+  });
+
+  for (const field of ['license', 'licenses']) {
+    it.each([
+      { value: 'MIT', expected: 'MIT' },
+      { value: '(ISC OR GPL-3.0)', expected: '(ISC OR GPL-3.0)' },
+      { value: 'GPL-2.0-only WITH Classpath-exception-2.0', expected: 'GPL-2.0-only WITH Classpath-exception-2.0' },
+      { value: { type: 'ISC', url: 'https://opensource.org/licenses/ISC' }, expected: 'ISC' },
+      { value: [{ type: 'MIT', url: 'http://github.com/mscdex/ssh2/raw/master/LICENSE' }], expected: 'MIT' },
+      { value: [{ type: 'MIT' }, { type: 'Apache-2.0' }], expected: 'MIT OR Apache-2.0' },
+      { value: ['MIT', 'Apache-2.0'], expected: 'MIT OR Apache-2.0' },
+      { value: ['MIT', { type: 'GPL-3.0-only' }], expected: 'MIT OR GPL-3.0-only' },
+      { value: [{ type: 'MIT AND Apache-2.0' }, 'GPL-3.0-only'], expected: '(MIT AND Apache-2.0) OR GPL-3.0-only' },
+      { value: [' MIT ', { type: 'MIT' }], expected: 'MIT' },
+      { value: ['SEE LICENSE IN missing.txt', 'MIT'], expected: 'SEE LICENSE IN missing.txt OR MIT' },
+    ])(`interprets ${field} declaration $value as $expected without requiring manual review`, async ({ value, expected }) => {
+      mockFiles({}, undefined, null, { [field]: value });
+
+      await main({ verbose: true, reviewLicenses: true, info: true });
+
+      expect(prompts).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining(`${expected} (1 usages)`));
+    });
+  }
+
+  it.each([null, 'UNKNOWN', 'NOASSERTION', 'SEE LICENSE IN missing.txt'])('prompts only when neither terms nor an informative declaration were found: %j', async type => {
+    mockFiles({}, undefined, type);
+    vi.mocked(prompts).mockResolvedValueOnce({ license: '' });
+
+    await main({ verbose: true, reviewLicenses: true });
+
+    expect(prompts).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count an empty license file as license information', async () => {
+    mockFiles({ LICENSE: ' \n\t ' }, undefined, null);
+    vi.mocked(prompts).mockResolvedValueOnce({ license: '' });
+
+    await main({ verbose: true, reviewLicenses: true });
+
+    expect(prompts).toHaveBeenCalledTimes(1);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Found 0 license files'));
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('No license file found (1)'));
   });
 

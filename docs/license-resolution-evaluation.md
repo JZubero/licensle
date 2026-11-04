@@ -91,6 +91,12 @@ notice text does not clear a missing-text entry. These selections apply to the
 current run; persistent version-scoped overrides and strict coverage mode below
 remain future work.
 
+Review prompts are limited to dependencies without any license information.
+Known declarations or collected terms suppress a prompt even if a full notice
+is still missing or the expression is not SPDX-specific. This keeps the three
+documented missing-notice cases visible without asking users to repeat existing
+license information or guess a BSD variant.
+
 1. Keep every external dependency in a structured result, even if discovery fails.
    Record ecosystem, package name, installed version, immutable reference or
    tarball integrity, declared expression, and text/attribution status separately.

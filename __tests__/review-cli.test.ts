@@ -15,8 +15,7 @@ describe('manual review in unattended CLI runs', () => {
     const dependency = join(project, 'node_modules/test-dep');
     mkdirSync(dependency, { recursive: true });
     writeFileSync(join(project, 'package.json'), '{"dependencies":{"test-dep":"1.0.0"}}');
-    writeFileSync(join(dependency, 'package.json'), '{"name":"test-dep","version":"1.0.0","license":"BSD"}');
-    writeFileSync(join(dependency, 'LICENSE'), 'Original fixture notice.');
+    writeFileSync(join(dependency, 'package.json'), '{"name":"test-dep","version":"1.0.0"}');
   });
 
   afterEach(() => {
@@ -37,7 +36,7 @@ describe('manual review in unattended CLI runs', () => {
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
     expect(result.stdout).not.toContain('License (SPDX expression)');
-    expect(readFileSync(outputFile, 'utf-8')).toContain('Original fixture notice.');
+    expect(readFileSync(outputFile, 'utf-8')).toContain('No license file provided.');
     expect(readFileSync(outputFile, 'utf-8')).not.toContain('License selected manually.');
     if (mode === 'default') expect(result.stdout).toContain('Manual license review skipped');
     if (mode === 'forced') expect(result.stderr).toContain('requires terminal input; skipped');

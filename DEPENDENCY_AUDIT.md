@@ -98,7 +98,7 @@ Tests are typechecked but excluded from the published artifact.
 Verified locally:
 
 - Frozen-lockfile installation with pnpm 10.34.9.
-- Typecheck, lint, all 101 tests, production build, and compiled CLI help
+- Typecheck, lint, all 206 tests, production build, and compiled CLI help
   on the pinned Node 26.13.0 runtime.
 - Earlier migration checks also passed on Node 24.15.0 and 22.12.0, before
   pinning the project to Node 26.13.0.
@@ -109,6 +109,13 @@ Verified locally:
 - Node.js CLI integration checks cover npm and pnpm layouts with scoped
   dependencies, projects without production dependencies or `node_modules`,
   and the default browser confirmation.
+- npm license-format checks cover SPDX strings and expressions, `UNLICENSED`,
+  `SEE LICENSE IN` references, legacy objects, and string/object arrays under
+  both `license` and `licenses`. The primary field takes precedence, with
+  fallback for absent or structurally unusable values. Referenced notice files
+  are read before generic filenames, including names containing spaces;
+  duplicate references are collected once and paths stay within the package.
+  `UNLICENSED` is represented as no license grant without requiring a notice.
 - Composer CLI checks cover Composer 1/2 metadata, custom vendor directories,
   installer paths, symlinked packages, metapackages, installed replacements and
   providers, platform-only projects, and retained missing-license records.
@@ -128,12 +135,42 @@ Verified locally:
   3 external missing-text cases remain documented in the license-resolution evaluation.
 - Manual review checks cover validated SPDX input, source links pinned to
   installed revisions, optional notice files, escaped HTML, retained original
-  declarations, skipping, cancellation, and updated copyleft warnings. An actual
+  declarations, skipping, cancellation, and updated copyleft warnings. An earlier
   terminal run rejected ambiguous `BSD`, accepted an SPDX expression and a file
   path containing spaces, and generated the expected report. CLI integration
   checks verify closed stdin never waits for manual review, including when forced.
+- Review eligibility uses available license information rather than requiring
+  an SPDX label. Regression checks cover local files, README terms, downloaded
+  text, declarations without notices, empty files, unknown placeholders, and
+  unresolved file pointers. Missing notice counts remain separate from prompts;
+  collected text without an identifier is shown as unclassified in `--info`.
+  A fresh VR Star run with review explicitly enabled scanned 16 manifests and
+  all 210 occurrences without prompting, retained the 3 missing notice files,
+  and preserved the ambiguous publisher label `BSD` without inventing a subtype.
+- Monorepo CLI checks cover root and workspace manifests, mixed Node/Composer
+  directories, Composer-only projects, overlapping and negative globs, custom
+  vendor directories, hoisted Node dependencies, workspace opt-outs, incomplete
+  installations, invalid manifests, and manual review of repeated dependency
+  names with different installed versions. The combined report retains each
+  occurrence's source manifest. Existing single-project checks continue to pass.
+- Compiled CLI run at the VR Star workspace root (`240bcfde5`): all 15 declared
+  manifests scanned into one report, 7 internal occurrences excluded, 192
+  external occurrences retained, and one missing-text entry retained. Its
+  separate `admin/composer.json` is outside the pnpm patterns and was not included.
+  VR Star's worktree remained unchanged. pnpm 10.34.9 CLI probes also confirmed
+  root-only discovery for omitted and empty `packages` lists.
+- Additional-file checks cover automatic and custom JSON configuration, CLI
+  additions and repeated flags, path resolution, spaces and absolute paths,
+  canonical-path deduplication, standalone scans, and invalid or missing files.
+  Explicit additional projects do not become internal workspace members.
+  No runtime dependencies were added for configuration support.
+- Compiled CLI run using a temporary configuration to add VR Star's
+  `admin/composer.json`: 16 manifests, 210 external dependency occurrences, and
+  the 3 known missing-text entries retained in one combined report. The VR Star
+  checkout and workspace configuration were not modified.
 
-Interactive browser launch and live repository downloads were not exercised.
+Interactive browser launch was not exercised. Live repository fallbacks were
+exercised during the VR Star runs.
 
 ## Recheck commands
 
