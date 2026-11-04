@@ -1,15 +1,20 @@
 {
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
     "outDir": "./dist",
     "strict": true,
-    "esModuleInterop": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
+    "noEmitOnError": true,
+    "types": ["node"],
     "resolveJsonModule": true
   },
   "include": [
     "index.ts",
-    "__tests__/index.test.ts"
+    "__tests__/**/*.ts"
   ]
 }
