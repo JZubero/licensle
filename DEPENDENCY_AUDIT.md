@@ -1,4 +1,4 @@
-# Dependency audit - 2026-11-03
+# Dependency audit - 2026-11-04
 
 Reviewed the direct dependencies, resolved lockfile, npm registry versions,
 security advisories, and installed production package license metadata.
@@ -24,7 +24,7 @@ of known registry advisories, not a complete security review of this CLI.
 
 ## Direct dependency decisions
 
-Versions below are the resolved installed versions. All six runtime dependencies
+Versions below are the resolved installed versions. All eight runtime dependencies
 are imported by the CLI; no unused direct dependency was found.
 
 | Package | Before | After | Decision |
@@ -34,9 +34,12 @@ are imported by the CLI; no unused direct dependency was found.
 | open | 11.0.0 | 11.0.4 | Apply patch. |
 | ora | 9.1.0 | 10.0.0 | Upgrade to major 10; verify spinner output. |
 | prompts | 2.4.2 | 2.4.2 | Latest registry release; no deprecation flag. |
+| spdx-expression-parse | - | 5.0.0 | Validate identifiers and expressions entered during manual license review. |
 | yesno | 0.4.0 | 0.4.0 | Latest registry release; no deprecation flag. |
+| yaml | - | 2.9.1 | Parse pnpm workspace declarations for membership-based exclusions. |
 | @types/node | 24.10.9 | 26.6.6 | Align type definitions with the pinned Node 26 runtime. |
 | @types/prompts | 2.4.9 | 2.4.9 | Current registry release. |
+| @types/spdx-expression-parse | - | 4.0.0 | Types for the SPDX expression parser. |
 | oxlint | 1.41.0 | 1.91.0 | Update within major 1. |
 | typescript | 5.9.3 | 7.0.2 | Upgrade to native compiler; verify types, declarations, and package output. |
 | vitest | 2.1.9 | 5.1.0 | Upgrade to major 5; verify mocks and CLI integration checks. |
@@ -76,8 +79,9 @@ prompt libraries are a candidate for consolidation in a later CLI cleanup.
 
 ## Production licenses
 
-`pnpm licenses list --prod --json` reports 34 installed runtime dependency
-packages: 32 MIT, 1 ISC (`signal-exit`), and 1 labeled `BSD` (`yesno`).
+`pnpm licenses list --prod --json` reports 38 installed runtime dependency
+packages: 33 MIT, 2 ISC (`signal-exit` and `yaml`), 1 CC-BY-3.0
+(`spdx-exceptions`), 1 CC0-1.0 (`spdx-license-ids`), and 1 labeled `BSD` (`yesno`).
 The installed yesno LICENSE identifies the latter as BSD 2-Clause.
 No unknown license labels were reported. This checks metadata and the ambiguous
 BSD license file; it is not a full review of every distributed source file.
@@ -94,7 +98,7 @@ Tests are typechecked but excluded from the published artifact.
 Verified locally:
 
 - Frozen-lockfile installation with pnpm 10.34.9.
-- Typecheck, lint, all 78 tests, production build, and compiled CLI help
+- Typecheck, lint, all 101 tests, production build, and compiled CLI help
   on the pinned Node 26.13.0 runtime.
 - Earlier migration checks also passed on Node 24.15.0 and 22.12.0, before
   pinning the project to Node 26.13.0.
@@ -117,6 +121,17 @@ Verified locally:
   arrays, permissive and custom-label exclusions, default and verbose scans,
   ANSI highlighting and plain output, Composer metapackages, and continued
   report generation.
+- Workspace exclusion checks cover pnpm and npm/Yarn membership, negative
+  patterns, explicit opt-out, missing local installations, external registry
+  packages with matching names, and unrelated symlinks. The VR Star rerun
+  excluded 7 internal occurrences and retained all 210 external occurrences;
+  3 external missing-text cases remain documented in the license-resolution evaluation.
+- Manual review checks cover validated SPDX input, source links pinned to
+  installed revisions, optional notice files, escaped HTML, retained original
+  declarations, skipping, cancellation, and updated copyleft warnings. An actual
+  terminal run rejected ambiguous `BSD`, accepted an SPDX expression and a file
+  path containing spaces, and generated the expected report. CLI integration
+  checks verify closed stdin never waits for manual review, including when forced.
 
 Interactive browser launch and live repository downloads were not exercised.
 

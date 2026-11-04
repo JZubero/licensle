@@ -28,8 +28,56 @@ Options:
   -i, --info                   provides information about all direct dependency licenses
   -o, --outputFilePath <path>  specify path and name of the output file
   -v, --verbose                activate verbose logging 
+  --no-exclude-workspace-packages  include same-monorepo dependencies (excluded by default)
+  --review-licenses            review unresolved licenses before generating the report (automatic in a terminal)
+  --no-review-licenses         skip interactive license review
   -h, --help                   output usage information
 ```
+
+## Workspace packages
+
+`excludeWorkspacePackages` defaults to `true`. Packages belonging to the same
+declared pnpm, npm, or Yarn workspace are excluded from license reports and
+missing-license counts. Workspace membership and the installed package's real
+path are checked; external pnpm-store packages and unrelated symlinks stay in
+scope. The scanner prints the number excluded, and `--verbose` lists their names.
+
+To include workspace packages, run:
+
+```bash
+licensle --no-exclude-workspace-packages
+```
+
+Programmatic callers can pass `main({ excludeWorkspacePackages: false })`.
+This exclusion applies to Node.js workspace packages; Composer scanning keeps
+its existing scope. Workspaces are still scanned individually.
+
+## Manual license review
+
+After scanning, the CLI prompts for dependencies with missing license text or
+an unrecognized license expression, before printing the final summary and
+generating HTML. Each prompt shows the installed version, declared license,
+source repository link when available, and npm or Packagist link. Repository
+links include the installed revision and package subdirectory when provided
+by the package metadata.
+
+Enter an SPDX identifier or expression, such as `BSD-3-Clause` or
+`MIT OR Apache-2.0`. Custom `LicenseRef-…` identifiers and `UNLICENSED` are
+also accepted. Then optionally supply a path to a readable license text file;
+leaving that path empty retains any text already collected. Choosing an
+identifier alone leaves a missing license text entry unresolved.
+
+Leave the license empty or enter `:skip` to skip a package. Enter `:done` or
+press Ctrl+C to finish reviewing and continue with the report; completed
+selections are retained. Selections affect this run only. HTML records manual
+selections, the original declaration, and whether notice text was supplied.
+The summary and copyleft warnings use the selected expression.
+
+Review runs automatically when input and output are terminals and `CI` is
+unset. Use `--no-review-licenses` to skip it, or `--review-licenses` to request
+it explicitly with terminal input. Unattended runs continue without prompting.
+Programmatic callers can set `main({ reviewLicenses: false })` or
+`main({ reviewLicenses: true })`.
 
 ## Copyleft warnings
 

@@ -5,6 +5,8 @@ import chalk from 'chalk';
 import open from 'open';
 import yesno from 'yesno';
 import prompts from 'prompts';
+import parseSpdxExpression from 'spdx-expression-parse';
+import { parse as parseYaml } from 'yaml';
 import fs from 'node:fs';
 import os from 'node:os';
 import https from 'node:https';
@@ -19,6 +21,10 @@ export interface LicenseItem {
   type: string | null;
   description: string | null;
   license?: string;
+  version?: string;
+  sourceUrl?: string;
+  packageUrl?: string;
+  manualReview?: { declaredType: string | null; licenseFile?: string };
 }
 
 export interface LicenseInfo {
@@ -31,16 +37,21 @@ export interface CliOptions {
   info?: boolean;
   outputFilePath?: string;
   verbose?: boolean;
+  excludeWorkspacePackages?: boolean;
+  reviewLicenses?: boolean;
 }
 
 interface DependencyManifest {
+  name?: string;
+  version?: string;
+  gitHead?: string;
   dependencies?: Record<string, unknown>;
   require?: Record<string, unknown>;
   replace?: Record<string, unknown>;
   provide?: Record<string, unknown>;
   license?: string | string[] | { type: string };
   description?: string;
-  repository?: string | { url: string };
+  repository?: string | { url: string; directory?: string };
   source?: { url: string; reference?: string };
   vendorDir?: string;
   type?: string;
@@ -56,6 +67,54 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function readWorkspaceMembers(projectDirectory: string): Map<string, string> {
+  let root = path.resolve(projectDirectory);
+  while (true) {
+    const workspaceFile = path.join(root, 'pnpm-workspace.yaml');
+    const rootManifestFile = path.join(root, 'package.json');
+    const rootManifest: unknown = fs.existsSync(rootManifestFile)
+      ? JSON.parse(fs.readFileSync(rootManifestFile, 'utf-8')) : undefined;
+    let patterns: unknown;
+    if (fs.existsSync(workspaceFile)) {
+      const config: unknown = parseYaml(fs.readFileSync(workspaceFile, 'utf-8'));
+      if (!isRecord(config) && config !== null) throw new Error(`Invalid workspace configuration: ${workspaceFile}`);
+      patterns = isRecord(config) ? config.packages ?? [] : [];
+    } else if (isRecord(rootManifest) && rootManifest.workspaces !== undefined) {
+      patterns = isRecord(rootManifest.workspaces) ? rootManifest.workspaces.packages : rootManifest.workspaces;
+    }
+    if (patterns !== undefined) {
+      if (!Array.isArray(patterns) || !patterns.every((pattern: unknown) => typeof pattern === 'string')) {
+        throw new Error(`Invalid workspace package patterns in ${root}`);
+      }
+      const normalizedPatterns = (patterns as string[]).map(pattern => {
+        const negative = pattern.startsWith('!');
+        return { negative, pattern: path.posix.normalize((negative ? pattern.slice(1) : pattern).replaceAll('\\', '/')) };
+      });
+      const excluded = normalizedPatterns.filter(pattern => pattern.negative).map(pattern => pattern.pattern);
+      const canonicalRoot = fs.realpathSync(root);
+      const members = new Map<string, string>([[canonicalRoot, isRecord(rootManifest) && typeof rootManifest.name === 'string' ? rootManifest.name : '']]);
+      for (const { pattern, negative } of normalizedPatterns) {
+        if (negative) continue;
+        for (const file of fs.globSync(`${pattern}/package.json`, { cwd: root, exclude: ['**/node_modules/**', '**/.git/**'] })) {
+          const declaredDirectory = path.dirname(path.resolve(root, file));
+          const declaredRelative = path.relative(root, declaredDirectory).split(path.sep).join('/');
+          if (excluded.some(pattern => path.matchesGlob(declaredRelative, pattern))) continue;
+          const directory = fs.realpathSync(declaredDirectory);
+          const relative = path.relative(canonicalRoot, directory).split(path.sep).join('/');
+          if (relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) continue;
+          if (relative.split('/').includes('node_modules')) continue;
+          const member: unknown = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf-8'));
+          if (isRecord(member) && typeof member.name === 'string') members.set(directory, member.name);
+        }
+      }
+      return members.has(fs.realpathSync(projectDirectory)) ? members : new Map();
+    }
+    const parent = path.dirname(root);
+    if (parent === root) return new Map();
+    root = parent;
+  }
+}
+
 function readManifest(filePath: string): DependencyManifest {
   const value: unknown = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
   return parseManifest(value, filePath);
@@ -65,6 +124,9 @@ function parseManifest(value: unknown, filePath: string): DependencyManifest {
   if (!isRecord(value)) throw new Error(`Invalid dependency manifest: ${filePath}`);
 
   const manifest: DependencyManifest = {};
+  for (const key of ['name', 'version', 'gitHead'] as const) {
+    if (typeof value[key] === 'string') manifest[key] = value[key];
+  }
   for (const key of ['dependencies', 'require', 'replace', 'provide'] as const) {
     if (value[key] !== undefined) {
       if (!isRecord(value[key])) throw new Error(`Invalid ${key} in ${filePath}`);
@@ -81,6 +143,7 @@ function parseManifest(value: unknown, filePath: string): DependencyManifest {
   if (typeof value.repository === 'string') manifest.repository = value.repository;
   else if (isRecord(value.repository) && typeof value.repository.url === 'string') {
     manifest.repository = { url: value.repository.url };
+    if (typeof value.repository.directory === 'string') manifest.repository.directory = value.repository.directory;
   }
   if (typeof value.type === 'string') manifest.type = value.type;
   if (isRecord(value.source) && typeof value.source.url === 'string') {
@@ -135,6 +198,123 @@ function licenseLabel(license: DependencyManifest['license']): string | null {
   if (typeof license === 'string') return license;
   if (Array.isArray(license)) return license.join(' OR ');
   return license?.type ?? null;
+}
+
+function repositoryBrowserUrl(repository: string): URL | null {
+  let normalized = repository.replace(/^git\+/, '').replace(/^git:\/\//, 'https://')
+    .replace(/^git@([^:]+):/, 'https://$1/').replace(/^ssh:\/\/(?:git@)?/, 'https://');
+  if (/^[\w.-]+\/[\w.-]+$/.test(normalized)) normalized = `https://github.com/${normalized}`;
+  normalized = normalized.replace(/^github:/, 'https://github.com/').replace(/^gitlab:/, 'https://gitlab.com/')
+    .replace(/^bitbucket:/, 'https://bitbucket.org/');
+  try {
+    const url = new URL(normalized);
+    if (!['http:', 'https:'].includes(url.protocol)) return null;
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    url.pathname = url.pathname.replace(/\/$/, '').replace(/\.git$/, '');
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function reviewSourceUrl(manifest: DependencyManifest, composer: boolean): string | undefined {
+  const repository = composer ? manifest.source?.url : typeof manifest.repository === 'string' ? manifest.repository : manifest.repository?.url;
+  const url = repository ? repositoryBrowserUrl(repository) : null;
+  if (!url) return undefined;
+  const reference = composer ? manifest.source?.reference : manifest.gitHead;
+  const directory = !composer && typeof manifest.repository === 'object' ? manifest.repository.directory : undefined;
+  const suffix = directory ? '/' + directory.replaceAll('\\', '/').split('/').filter(part => part && part !== '.' && part !== '..').map(encodeURIComponent).join('/') : '';
+  if (reference && url.hostname === 'github.com') url.pathname += `/tree/${encodeURIComponent(reference)}${suffix}`;
+  else if (reference && (url.hostname === 'gitlab.com' || url.hostname.startsWith('gitlab.'))) url.pathname += `/-/tree/${encodeURIComponent(reference)}${suffix}`;
+  else if (reference && url.hostname === 'bitbucket.org') url.pathname += `/src/${encodeURIComponent(reference)}${suffix}`;
+  return url.href;
+}
+
+function validLicenseExpression(value: string | null): boolean {
+  if (!value?.trim()) return false;
+  if (value.trim().toUpperCase() === 'UNLICENSED') return true;
+  try {
+    parseSpdxExpression(value.trim());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function noticeFilePath(value: string): string {
+  return path.resolve(value.trim().replace(/^(\$HOME|~)(?=[/\\]|$)/, () => os.homedir()));
+}
+
+function validateNoticeFile(value: unknown): true | string {
+  if (typeof value !== 'string') return 'Enter a file path or leave empty.';
+  if (!value.trim()) return true;
+  try {
+    const file = noticeFilePath(value);
+    if (!fs.statSync(file).isFile() || !fs.readFileSync(file, 'utf-8').trim()) return 'Choose a readable, non-empty license text file.';
+    return true;
+  } catch {
+    return 'Choose a readable, non-empty license text file.';
+  }
+}
+
+async function reviewMissingLicenses(items: LicenseItem[]): Promise<{ reviewed: number; files: number }> {
+  const result = { reviewed: 0, files: 0 };
+  console.log(chalk.cyanBright.bold(`Manual license review: ${items.length} ${items.length === 1 ? 'dependency needs' : 'dependencies need'} attention.`));
+  console.log('Enter a SPDX expression, leave empty to skip, or enter :done to finish reviewing.');
+  for (const item of items) {
+    console.log(chalk.cyanBright.bold(`\n${item.module}${item.version ? `@${item.version}` : ''}`));
+    console.log(`Declared license: ${item.type || 'not specified'}`);
+    if (item.sourceUrl) console.log(`Source: ${item.sourceUrl}`);
+    if (item.packageUrl) console.log(`Package: ${item.packageUrl}`);
+    let cancelled = false;
+    const answers = await prompts<'license' | 'licenseFile'>([
+      {
+        type: 'text', name: 'license', message: 'License (SPDX expression)',
+        validate: (value: unknown) => typeof value === 'string' && (!value.trim() || [':skip', ':done'].includes(value.trim()) || validLicenseExpression(value))
+          ? true : 'Enter an SPDX expression such as MIT or BSD-3-Clause, or leave empty to skip.',
+      },
+      {
+        type: (previous: unknown) => typeof previous === 'string' && previous.trim() && !previous.trim().startsWith(':') ? 'text' : null,
+        name: 'licenseFile', message: 'License text file (optional; empty to keep existing text)',
+        validate: validateNoticeFile,
+      },
+    ], { onCancel: () => { cancelled = true; } });
+    const license: unknown = answers.license;
+    const enteredLicense = typeof license === 'string' ? license.trim() : undefined;
+    const licenseFile: unknown = answers.licenseFile;
+    if (cancelled || enteredLicense === undefined || enteredLicense === ':done') {
+      console.log(chalk.yellow('Manual review stopped. Unresolved dependencies remain in the report.'));
+      break;
+    }
+    if (!enteredLicense || enteredLicense === ':skip') continue;
+    if (!validLicenseExpression(enteredLicense)) continue;
+    let text: string | undefined;
+    const providedFile = typeof licenseFile === 'string' && licenseFile.trim() ? noticeFilePath(licenseFile) : undefined;
+    if (providedFile) {
+      try {
+        text = fs.readFileSync(providedFile, 'utf-8');
+        if (!text.trim()) throw new Error('Empty license file');
+      } catch (error: unknown) {
+        console.warn(chalk.yellow(`Could not apply manual review for ${item.module}: ${error instanceof Error ? error.message : String(error)}`));
+        continue;
+      }
+    }
+    item.manualReview = { declaredType: item.type, ...(providedFile ? { licenseFile: providedFile } : {}) };
+    item.type = enteredLicense;
+    if (text !== undefined) {
+      item.license = text;
+      result.files++;
+    }
+    result.reviewed++;
+  }
+  return result;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] ?? character);
 }
 
 // Common software copyleft licenses; classify declared identifiers, not license prose.
@@ -202,6 +382,31 @@ export async function main(options: CliOptions): Promise<void> {
     const folder = isPackageMode() ? 'node_modules' : configuredFolder.replace(/^(\$HOME|~)(?=[/\\]|$)/, () => os.homedir());
     let dependencies = Object.keys((isPackageMode() ? manifest.dependencies : manifest.require) ?? {});
     if (isComposerMode()) dependencies = dependencies.filter(d => d.indexOf('/') >= 0);
+    if (isPackageMode() && options.excludeWorkspacePackages !== false && dependencies.length > 0) {
+      const workspaceMembers = readWorkspaceMembers(process.cwd());
+      const workspaceNames = new Set(workspaceMembers.values());
+      const excluded: string[] = [];
+      dependencies = dependencies.filter(dependency => {
+        const installedDirectory = path.join(folder, dependency);
+        const specifier = manifest.dependencies?.[dependency];
+        let internal = false;
+        if (workspaceMembers.size > 0) {
+          try {
+            internal = fs.existsSync(installedDirectory)
+              ? workspaceMembers.has(fs.realpathSync(installedDirectory))
+              : typeof specifier === 'string' && specifier.startsWith('workspace:') && workspaceNames.has(dependency);
+          } catch {
+            // Unverified paths stay in scope and are reported by the regular scan.
+          }
+        }
+        if (internal) excluded.push(dependency);
+        return !internal;
+      });
+      if (excluded.length > 0) {
+        console.log(chalk.magentaBright(`Excluded ${excluded.length} same-monorepo workspace packages.`));
+        if (options.verbose) for (const dependency of excluded) console.log(chalk.blueBright(` - ${dependency}`));
+      }
+    }
     if (dependencies.length > 0 && !fs.existsSync(folder)) {
       console.error(chalk.red(`There is no dependency folder (${folder}/) in the current directory.`));
       return;
@@ -227,13 +432,17 @@ export async function main(options: CliOptions): Promise<void> {
 
     const licenseItems: LicenseItem[] = [];
     const licenseDownloads: { [url: string]: string } = {};
-    const failures: string[] = [];
+    let failures: string[] = [];
     let licenseFileCounter = 0;
     let licenseDownloadCounter = 0;
     let readmeLicenseCounter = 0;
 
     for (const dependency of dependencies) {
-      let licenseItem: LicenseItem = { module: dependency, type: null, description: null };
+      const registry = isComposerMode() ? 'https://packagist.org/packages/' : 'https://www.npmjs.com/package/';
+      let licenseItem: LicenseItem = {
+        module: dependency, type: null, description: null,
+        packageUrl: registry + dependency.split('/').map(encodeURIComponent).join('/'),
+      };
       try {
         const installed = composerPackages.get(dependency);
         const defaultFolder = path.join(folder, dependency);
@@ -243,7 +452,10 @@ export async function main(options: CliOptions): Promise<void> {
         licenseItem = {
           module: dependency,
           type: licenseLabel(descriptionFile.license),
-          description: descriptionFile.description || null
+          description: descriptionFile.description || null,
+          version: descriptionFile.version,
+          sourceUrl: reviewSourceUrl(descriptionFile, isComposerMode()),
+          packageUrl: registry + (descriptionFile.name || dependency).split('/').map(encodeURIComponent).join('/'),
         };
         if (dependencyFolder === null) {
           licenseItems.push(licenseItem);
@@ -326,6 +538,17 @@ export async function main(options: CliOptions): Promise<void> {
     }
     if (!options.verbose) spinner.succeed(chalk.magentaBright(`Scanning ${folder}/... done!`));
 
+    const reviewItems = licenseItems.filter(item => failures.includes(item.module) || !validLicenseExpression(item.type));
+    const interactiveTerminal = Boolean(process.stdin.isTTY && process.stdout.isTTY && !process.env.CI);
+    if (reviewItems.length > 0 && (options.reviewLicenses ?? interactiveTerminal)) {
+      const reviewed = await reviewMissingLicenses(reviewItems);
+      if (reviewed.reviewed > 0) console.log(chalk.cyanBright(`Manually reviewed ${reviewed.reviewed} ${reviewed.reviewed === 1 ? 'dependency' : 'dependencies'}.`));
+      if (reviewed.files > 0) console.log(chalk.cyanBright(`Provided ${reviewed.files} license text ${reviewed.files === 1 ? 'file' : 'files'} manually.`));
+      failures = failures.filter(dependency => !licenseItems.some(item => item.module === dependency && item.license));
+    } else if (reviewItems.length > 0 && options.reviewLicenses !== false) {
+      console.log(chalk.yellow(`Manual license review skipped for ${reviewItems.length} ${reviewItems.length === 1 ? 'dependency' : 'dependencies'}. Run with --review-licenses in a terminal to review.`));
+    }
+
     const copyleftItems = licenseItems.filter(item => hasCopyleftLicense(item.type));
     if (copyleftItems.length > 0) {
       console.warn(chalk.bgYellow.black.bold(' COPYLEFT WARNING '));
@@ -371,10 +594,16 @@ export async function main(options: CliOptions): Promise<void> {
       let html = '';
       for (const f of licenseItems) {
         const licenseText = f.license || 'No license file provided.';
+        const manualDetails = f.manualReview ? `
+          <p><strong>License selected manually.</strong> Original declaration: ${escapeHtml(f.manualReview.declaredType || 'not specified')}.</p>
+          <p>Version: ${escapeHtml(f.version || 'unknown')}.${f.sourceUrl ? ` <a href="${escapeHtml(f.sourceUrl)}">Source repository</a>.` : ''}${f.packageUrl ? ` <a href="${escapeHtml(f.packageUrl)}">Package metadata</a>.` : ''}</p>
+          <p>${f.manualReview.licenseFile ? `License text supplied manually (${escapeHtml(path.basename(f.manualReview.licenseFile))}).` : f.license ? 'Existing license text retained.' : 'No full license text supplied.'}</p>
+        ` : '';
         html += `
-          <h2>${f.module}</h2>
-          <p>${f.type ? `<strong>${f.type}</strong> - ` : ''}${f.description}</p>
-          <pre>${licenseText}</pre>
+          <h2>${escapeHtml(f.module)}</h2>
+          <p>${f.type ? `<strong>${escapeHtml(f.type)}</strong> - ` : ''}${escapeHtml(f.description || '')}</p>
+          ${manualDetails}
+          <pre>${escapeHtml(licenseText)}</pre>
           <hr>
         `;
       }
@@ -417,10 +646,18 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(proces
     .option('--no-browser', 'prevents the browser from popping open')
     .option('-i, --info', 'provides information about all direct dependency licenses')
     .option('-o, --outputFilePath <path>', 'specify path and name of the output file')
-    .option('-v, --verbose', 'activate verbose logging ');
+    .option('-v, --verbose', 'activate verbose logging ')
+    .option('--no-exclude-workspace-packages', 'include dependencies from the same monorepo (excluded by default)')
+    .option('--review-licenses', 'review unresolved licenses before generating the report (automatic in a terminal)')
+    .option('--no-review-licenses', 'skip interactive license review');
 
   program.parse(process.argv);
   const options = program.opts<CliOptions>();
+
+  if (options.reviewLicenses && !process.stdin.isTTY) {
+    console.warn(chalk.yellow('Manual license review requires terminal input; skipped.'));
+    options.reviewLicenses = false;
+  }
 
   if (options.outputFilePath && !options.generate) {
     console.warn(chalk.bgYellow.black('Warning: Using --outputFilePath without -g (--generate) will not have any effect.'));
